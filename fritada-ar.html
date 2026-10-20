@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Fritada AR</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;background:#000;font-family:system-ui,sans-serif;-webkit-tap-highlight-color:transparent}
+  #cam,#gl{position:fixed;inset:0;width:100%;height:100%}
+  #cam{object-fit:cover}
+  .ui{position:fixed;display:flex;flex-direction:column;align-items:center;gap:6px;color:#fff;font-size:14px;text-decoration:none}
+  .btn{width:52px;height:52px;border-radius:50%;background:rgba(30,30,30,.82);display:grid;place-items:center;border:0;padding:0}
+  .btn svg{width:26px;height:26px;fill:none;stroke:#fff;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+  #close{top:16px;right:16px} #three{top:84px;right:16px}
+  #rot{right:16px;bottom:18px}
+  #msg{position:fixed;left:12px;right:12px;top:16px;padding:10px 14px;border-radius:12px;background:rgba(0,0,0,.6);color:#fff;font-size:15px;text-align:center;pointer-events:none;transition:opacity .6s}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/loaders/GLTFLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/loaders/DRACOLoader.js"></script>
+</head>
+<body>
+<video id="cam" autoplay playsinline muted></video>
+<canvas id="gl"></canvas>
+<a id="close" class="ui btn" href="fritada.html" aria-label="Cerrar"><svg viewBox="0 0 24 24"><path d="M5 5l14 14M19 5L5 19"/></svg></a>
+<a id="three" class="ui btn" href="fritada.html" aria-label="Ver en 3D"><svg viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9zM12 12l8-4.5M12 12v9M12 12L4 7.5"/></svg></a>
+<button id="rot" class="ui" style="background:none;border:0"><span class="btn"><svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.5-5.8M20 4v5h-5"/></svg></span>Rotar</button>
+<div id="msg">Apunta a la mesa. Toca para mover el plato; con dos dedos cambias su tamaño.</div>
+<script>
+// AR de 3 grados de libertad: video de la camara + plato 3D girado por el giroscopio.
+// shortcut: no sigue el desplazamiento del celular (solo la rotacion); si hace falta anclaje real, ver fritada-slam.html
+const q = new URLSearchParams(location.search)
+const CAM_H = +q.get('h') || 0.3 // m: altura asumida del celular sobre la mesa; menor = plato mas grande
+const FOV = +q.get('fov') || 65 // grados verticales de la camara en vertical; si el plato "nada" al girar, ajustar
+const msg = document.getElementById('msg')
+const $ = (id) => document.getElementById(id)
+
+const renderer = new THREE.WebGLRenderer({canvas: $('gl'), alpha: true, antialias: true})
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2))
+renderer.outputEncoding = THREE.sRGBEncoding
+const scene = new THREE.Scene()
+const camera = new THREE.PerspectiveCamera(FOV, 1, 0.01, 50)
+camera.position.set(0, CAM_H, 0)
+scene.add(new THREE.HemisphereLight(0xffffff, 0x999999, 1.4))
+const sun = new THREE.DirectionalLight(0xffffff, 1.6); sun.position.set(1, 3, 1); scene.add(sun)
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(50, 50), new THREE.MeshBasicMaterial({visible: false}))
+ground.rotation.x = -Math.PI / 2
+scene.add(ground)
+
+// sombra de contacto: mancha radial suave bajo el plato
+const sc = document.createElement('canvas'); sc.width = sc.height = 128
+const g2 = sc.getContext('2d'), gr = g2.createRadialGradient(64, 64, 8, 64, 64, 64)
+gr.addColorStop(0, 'rgba(0,0,0,.6)'); gr.addColorStop(1, 'rgba(0,0,0,0)')
+g2.fillStyle = gr; g2.fillRect(0, 0, 128, 128)
+const shadow = new THREE.Mesh(new THREE.PlaneGeometry(0.4, 0.4), new THREE.MeshBasicMaterial({map: new THREE.CanvasTexture(sc), transparent: true, depthWrite: false}))
+shadow.rotation.x = -Math.PI / 2; shadow.visible = false
+scene.add(shadow)
+
+const resize = () => { renderer.setSize(innerWidth, innerHeight, false); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix() }
+resize(); addEventListener('resize', resize)
+
+navigator.mediaDevices.getUserMedia({video: {facingMode: 'environment', width: {ideal: 1280}, height: {ideal: 720}}})
+  .then((s) => { $('cam').srcObject = s })
+  .catch((e) => { msg.textContent = 'No se pudo abrir la camara: ' + e.message })
+
+// giroscopio -> orientacion de la camara (misma formula que three DeviceOrientationControls)
+const zee = new THREE.Vector3(0, 0, 1), q1 = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5)), tmp = new THREE.Quaternion(), eul = new THREE.Euler()
+let gotGyro = false, yaw0 = null
+addEventListener('deviceorientation', (e) => {
+  if (e.alpha == null) return
+  gotGyro = true
+  const d = THREE.MathUtils.degToRad
+  if (yaw0 === null) yaw0 = d(e.alpha) // el norte no importa: el plato se coloca en relacion a donde miras
+  const orient = d(screen.orientation ? screen.orientation.angle : 0)
+  eul.set(d(e.beta), d(e.alpha) - yaw0, -d(e.gamma), 'YXZ')
+  camera.quaternion.setFromEuler(eul).multiply(q1).multiply(tmp.setFromAxisAngle(zee, -orient))
+})
+// iOS exige un permiso tras un toque; Chrome Android 155 tambien expone requestPermission, por eso se escucha siempre
+if (typeof DeviceOrientationEvent !== 'undefined' && DeviceOrientationEvent.requestPermission) {
+  addEventListener('touchend', () => DeviceOrientationEvent.requestPermission().catch(() => {}), {once: true})
+}
+setTimeout(() => { if (!gotGyro) msg.textContent = 'Este celular no entrega datos del giroscopio.' }, 2500)
+
+let plate, placed = false
+const setScale = (s) => {
+  plate.scale.setScalar(Math.min(4, Math.max(0.4, s)))
+  shadow.scale.setScalar(plate.scale.x)
+}
+const setPos = (p) => { plate.position.copy(p); shadow.position.set(p.x, 0.001, p.z) }
+
+const draco = new THREE.DRACOLoader()
+draco.setDecoderPath('https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/libs/draco/gltf/')
+const loader = new THREE.GLTFLoader(); loader.setDRACOLoader(draco)
+loader.load('fritada.glb', (g) => {
+  plate = g.scene; plate.visible = false; scene.add(plate)
+  // nitidez de las texturas al mirar el plato en angulo
+  plate.traverse((o) => { const m = o.material; if (m) for (const k of ['map', 'normalMap', 'roughnessMap']) if (m[k]) m[k].anisotropy = renderer.capabilities.getMaxAnisotropy() })
+}, undefined, (e) => { msg.textContent = 'No cargo el plato: ' + e.message })
+
+const ray = new THREE.Raycaster()
+const hitGround = (cx, cy) => {
+  ray.setFromCamera(new THREE.Vector2((cx / innerWidth) * 2 - 1, -(cy / innerHeight) * 2 + 1), camera)
+  return ray.intersectObject(ground)[0]
+}
+const dist = (e) => Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY)
+let d0, s0
+addEventListener('touchstart', (e) => {
+  if (!plate || e.target.closest('.ui')) return
+  if (e.touches.length === 2) { d0 = dist(e); s0 = plate.scale.x; return }
+  const h = hitGround(e.touches[0].clientX, e.touches[0].clientY)
+  if (h) setPos(h.point)
+})
+addEventListener('touchmove', (e) => { if (plate && e.touches.length === 2) setScale(s0 * dist(e) / d0) })
+$('rot').onclick = () => plate && (plate.rotation.y += Math.PI / 4)
+
+renderer.setAnimationLoop(() => {
+  // primera vez: el plato aparece donde apunta el centro de la pantalla, cuando ya hay giroscopio
+  if (!placed && plate && gotGyro) {
+    const h = hitGround(innerWidth / 2, innerHeight / 2)
+    if (h) { setPos(h.point); setScale(1); plate.visible = shadow.visible = placed = true; setTimeout(() => (msg.style.opacity = 0), 5000) }
+  }
+  renderer.render(scene, camera)
+})
+</script>
+</body>
+</html>

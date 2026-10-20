@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Fritada AR</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;background:#000;font-family:system-ui,sans-serif}
+  #camerafeed{position:fixed;inset:0;width:100%;height:100%}
+  #msg{position:fixed;left:12px;right:12px;bottom:16px;padding:10px 14px;border-radius:12px;background:rgba(0,0,0,.6);color:#fff;font-size:15px;text-align:center;pointer-events:none}
+  #err{position:fixed;left:8px;right:8px;top:8px;color:#ff8080;font:12px monospace;white-space:pre-wrap;pointer-events:none}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/loaders/GLTFLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/loaders/DRACOLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@8thwall/engine-binary@1.0.0/dist/xr.js" async crossorigin="anonymous" data-preload-chunks="slam"></script>
+</head>
+<body>
+<canvas id="camerafeed"></canvas>
+<div id="err"></div>
+<div id="msg">Apunta a la mesa y mueve el celular despacio. Toca para mover el plato; con dos dedos cambias su tamano.<br><small style="opacity:.6">Motor AR: 8th Wall, Niantic Spatial</small></div>
+<script>
+const MODEL = 'fritada.glb'
+const q = new URLSearchParams(location.search)
+// m: altura asumida del celular sobre la mesa; define la escala (shortcut: no mide la escala real, el pellizco la corrige).
+// Menor que la real = plato mas grande; se ve mejor la comida.
+const CAM_H = +q.get('h') || 0.3
+const SMOOTH = +q.get('s') || 0.15 // 0..1, filtro de la posicion de la camara; menor = mas suave pero con mas retraso
+const START_SCALE = +q.get('k') || 1.3
+const err = (e) => { document.getElementById('err').textContent += (e && e.message || e) + '\n' }
+window.addEventListener('error', (e) => err(e.message))
+window.addEventListener('unhandledrejection', (e) => err(e.reason))
+
+const scenePipeline = () => {
+  let plate, ground, smooth, placed = false
+  const ray = new THREE.Raycaster()
+  const hitGround = (nx, ny) => {
+    const {camera} = XR8.Threejs.xrScene()
+    ray.setFromCamera(new THREE.Vector2(nx, ny), camera)
+    return ray.intersectObject(ground)[0]
+  }
+  return {
+    name: 'fritada',
+    onStart: ({canvas}) => {
+      const {scene, camera, renderer} = XR8.Threejs.xrScene()
+      renderer.outputEncoding = THREE.sRGBEncoding
+      scene.add(new THREE.HemisphereLight(0xffffff, 0x999999, 1.4))
+      const sun = new THREE.DirectionalLight(0xffffff, 1.6); sun.position.set(1, 3, 1); scene.add(sun)
+
+      ground = new THREE.Mesh(new THREE.PlaneGeometry(50, 50), new THREE.MeshBasicMaterial({visible: false}))
+      ground.rotation.x = -Math.PI / 2
+      scene.add(ground)
+
+      const draco = new THREE.DRACOLoader()
+      draco.setDecoderPath('https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/libs/draco/gltf/')
+      const loader = new THREE.GLTFLoader(); loader.setDRACOLoader(draco)
+      loader.load(MODEL, (g) => { plate = g.scene; plate.visible = false; scene.add(plate) }, undefined, err)
+
+      camera.position.set(0, CAM_H, 0)
+      XR8.XrController.updateCameraProjectionMatrix({origin: camera.position, facing: camera.quaternion})
+
+      const dist = (e) => Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY)
+      let d0, s0
+      canvas.addEventListener('touchstart', (e) => {
+        if (!plate) return
+        if (e.touches.length === 2) { d0 = dist(e); s0 = plate.scale.x; return }
+        const t = e.touches[0]
+        const h = hitGround((t.clientX / innerWidth) * 2 - 1, -(t.clientY / innerHeight) * 2 + 1)
+        if (h) plate.position.copy(h.point)
+      })
+      canvas.addEventListener('touchmove', (e) => { // pellizco: tamano del plato
+        if (plate && e.touches.length === 2) plate.scale.setScalar(Math.min(4, Math.max(0.4, s0 * dist(e) / d0)))
+      })
+    },
+    onUpdate: () => {
+      // suaviza solo la posicion (la rotacion viene del giroscopio, que no tiembla)
+      const {camera} = XR8.Threejs.xrScene()
+      if (!smooth) smooth = camera.position.clone(); else smooth.lerp(camera.position, SMOOTH)
+      camera.position.copy(smooth)
+      // primera vez: el plato aparece solo donde apunta el centro de la pantalla
+      if (placed || !plate || !ground) return
+      const h = hitGround(0, 0)
+      if (h) { plate.position.copy(h.point); plate.scale.setScalar(START_SCALE); plate.visible = true; placed = true }
+    },
+  }
+}
+
+// reemplaza XRExtras.FullWindowCanvas (el CDN de 8th Wall ya no existe).
+// ratio 1.5 y no devicePixelRatio: en celulares viejos el fill-rate de 3x se ahoga
+const sizeCanvas = (canvas) => {
+  const r = Math.min(devicePixelRatio, +q.get('r') || 1.5)
+  canvas.width = Math.round(innerWidth * r); canvas.height = Math.round(innerHeight * r)
+}
+const fullWindowCanvas = () => ({
+  name: 'fullwindow',
+  onStart: ({canvas}) => {
+    // Threejs creo el renderer con el tamano por defecto del canvas y le puso style en px
+    const apply = () => {
+      sizeCanvas(canvas)
+      XR8.Threejs.xrScene().renderer.setSize(canvas.width, canvas.height, false)
+      canvas.style.width = canvas.style.height = '100%'
+    }
+    apply(); addEventListener('resize', apply); addEventListener('orientationchange', apply)
+  },
+})
+
+const onxrloaded = () => {
+  sizeCanvas(document.getElementById('camerafeed')) // antes de que Threejs cree el renderer
+  XR8.addCameraPipelineModules([
+    XR8.GlTextureRenderer.pipelineModule(),
+    XR8.Threejs.pipelineModule(),
+    XR8.XrController.pipelineModule(),
+    fullWindowCanvas(),
+    scenePipeline(),
+  ])
+  XR8.XrController.configure({scale: q.get('scale') || 'responsive'})
+  XR8.run({canvas: document.getElementById('camerafeed'), allowedDevices: XR8.XrConfig.device().ANY})
+}
+window.XR8 ? onxrloaded() : window.addEventListener('xrloaded', onxrloaded)
+</script>
+</body>
+</html>
