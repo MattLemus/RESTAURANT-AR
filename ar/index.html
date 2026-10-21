@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fritada AR</title>
+<script type="module" src="https://cdn.jsdelivr.net/npm/@google/model-viewer@3.5.0/dist/model-viewer.min.js"></script>
+<style>
+  html, body { margin: 0; height: 100%; background: #1b1511; }
+  model-viewer { width: 100%; height: 100%; --poster-color: transparent; }
+  button[slot="ar-button"] { position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%); padding: 14px 28px; font: 600 16px system-ui; border: 0; border-radius: 999px; background: #f2b134; color: #1b1511; }
+</style>
+</head>
+<body>
+<model-viewer id="mv" src="fritada.glb?v=3" alt="Fritada"
+  ar ar-modes="scene-viewer webxr quick-look" ar-scale="fixed" ar-placement="floor"
+  camera-controls auto-rotate touch-action="pan-y"
+  shadow-intensity="1" exposure="1.1" environment-image="neutral">
+  <button slot="ar-button">Ver en tu mesa</button>
+</model-viewer>
+</body>
+</html>
