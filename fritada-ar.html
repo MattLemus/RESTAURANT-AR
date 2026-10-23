@@ -35,7 +35,6 @@
 import * as THREE from 'three'
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js'
 import {DRACOLoader} from 'three/addons/loaders/DRACOLoader.js'
-import {RoomEnvironment} from 'three/addons/environments/RoomEnvironment.js'
 const q = new URLSearchParams(location.search)
 const CAM_H = +q.get('h') || 0.45 // m: altura asumida del celular sobre la mesa (sentado, brazo normal); menor = plato mas grande
 // grados que abarca la camara a lo largo de su lado largo (camara principal ~26 mm equivalentes); si el plato "nada" al girar, ajustar
@@ -46,12 +45,12 @@ const $ = (id) => document.getElementById(id)
 
 const renderer = new THREE.WebGLRenderer({canvas: $('gl'), alpha: true, antialias: true})
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2))
-// misma luz y tono que el visor 3D (model-viewer tone-mapping="neutral"), para que el plato se vea igual en los dos
 renderer.toneMapping = THREE.NeutralToneMapping
 renderer.toneMappingExposure = +q.get('exp') || 0.85 // mas alto se ve mas blanco que un plato real bajo la luz de la sala
 renderer.shadowMap.enabled = true
 const scene = new THREE.Scene()
-scene.environment = new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(), 0.04).texture
+// luz ambiente pareja; la comida es Lambert (sin reflejos), asi que no hace falta un entorno que refleje
+scene.add(new THREE.HemisphereLight(0xffffff, 0x8a7f74, +q.get('amb') || 3))
 const camera = new THREE.PerspectiveCamera(65, 1, 0.01, 50)
 camera.position.set(0, CAM_H, 0)
 // la mesa: invisible, solo recibe la sombra del plato
@@ -93,6 +92,9 @@ navigator.mediaDevices.getUserMedia({video: {facingMode: 'environment', width: {
 // giroscopio -> orientacion de la camara (misma formula que three DeviceOrientationControls)
 const zee = new THREE.Vector3(0, 0, 1), q1 = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5)), tmp = new THREE.Quaternion(), eul = new THREE.Euler()
 let gotGyro = false, yaw0 = null
+// el giroscopio llega a ~25 lecturas/s en celulares como el Honor; se guardan las dos ultimas para predecir el giro en cada cuadro
+const qPrev = new THREE.Quaternion(), qLast = new THREE.Quaternion(), qStep = new THREE.Quaternion(), qId = new THREE.Quaternion()
+let tPrev = 0, tLast = 0
 addEventListener('deviceorientation', (e) => {
   if (e.alpha == null) return
   gotGyro = true
@@ -100,8 +102,17 @@ addEventListener('deviceorientation', (e) => {
   if (yaw0 === null) yaw0 = d(e.alpha) // el norte no importa: el plato se coloca en relacion a donde miras
   const orient = d(screen.orientation ? screen.orientation.angle : 0)
   eul.set(d(e.beta), d(e.alpha) - yaw0, -d(e.gamma), 'YXZ')
-  camera.quaternion.setFromEuler(eul).multiply(q1).multiply(tmp.setFromAxisAngle(zee, -orient))
+  qPrev.copy(qLast); tPrev = tLast
+  qLast.setFromEuler(eul).multiply(q1).multiply(tmp.setFromAxisAngle(zee, -orient)); tLast = performance.now()
 })
+// sigue girando a la misma velocidad que entre las dos ultimas lecturas (como mucho 1.5 intervalos, para no pasarse si el celular se detiene)
+const predictCamera = () => {
+  const gap = tLast - tPrev
+  if (!tPrev || gap <= 0 || gap > 150) return camera.quaternion.copy(qLast)
+  const f = Math.min(1.5, (performance.now() - tLast) / gap)
+  qStep.copy(qLast).multiply(tmp.copy(qPrev).invert()) // giro de la lectura anterior a la ultima
+  camera.quaternion.copy(qId).slerp(qStep, f).multiply(qLast)
+}
 // iOS exige un permiso tras un toque; Chrome Android 155 tambien expone requestPermission, por eso se escucha siempre
 if (typeof DeviceOrientationEvent !== 'undefined' && DeviceOrientationEvent.requestPermission) {
   addEventListener('touchend', () => DeviceOrientationEvent.requestPermission().catch(() => {}), {once: true})
@@ -128,10 +139,11 @@ loader.load('fritada.glb', (g) => {
   plate.traverse((o) => {
     if (!o.isMesh) return
     o.castShadow = true
-    // la textura de rugosidad hace brillar el arroz como hielo; la comida va mate
-    Object.assign(o.material, {roughnessMap: null, roughness: 0.85, metalness: 0, needsUpdate: true})
-    // tono calido de la luz de una sala (medido en la foto de un plato real: blanco crema, no blanco azulado)
-    o.material.color.set(q.get('tint') ? '#' + q.get('tint') : 0xffecd8)
+    // Lambert = sin ningun reflejo, como el hot dog de Snapchat; el material PBR brillaba (comida "mojada") aunque fuera rugoso.
+    // Color: tono calido de la luz de una sala (medido en la foto de un plato real: blanco crema, no blanco azulado)
+    const m = o.material
+    o.material = new THREE.MeshLambertMaterial({map: m.map, normalMap: m.normalMap, color: q.get('tint') ? '#' + q.get('tint') : 0xffecd8})
+    m.dispose()
   })
 }, undefined, (e) => { msg.textContent = 'No cargo el plato: ' + e.message })
 
@@ -154,6 +166,7 @@ $('rot').onclick = () => plate && (plate.rotation.y += Math.PI / 4)
 const clock = new THREE.Clock()
 renderer.setAnimationLoop(() => {
   const dt = Math.min(0.1, clock.getDelta())
+  predictCamera()
   if (placed) plate.rotation.y += SPIN * dt
   // primera vez: el plato aparece donde apunta el centro de la pantalla, cuando ya hay giroscopio
   if (!placed && plate && gotGyro) {
