@@ -27,12 +27,14 @@ const q = new URLSearchParams(location.search)
 const CAM_H = +q.get('h') || 0.3
 const SMOOTH = +q.get('s') || 0.15 // 0..1, filtro de la posicion de la camara; menor = mas suave pero con mas retraso
 const START_SCALE = +q.get('k') || 1.3
+// sin ARCore no se puede caminar alrededor del plato (solo hay giro, como Snapchat en estos celulares): el plato gira solo
+const SPIN = q.has('rot') ? +q.get('rot') : 0.35 // rad/s, una vuelta cada ~18 s
 const err = (e) => { document.getElementById('err').textContent += (e && e.message || e) + '\n' }
 window.addEventListener('error', (e) => err(e.message))
 window.addEventListener('unhandledrejection', (e) => err(e.reason))
 
 const scenePipeline = () => {
-  let plate, ground, smooth, placed = false
+  let plate, ground, smooth, last, placed = false
   const ray = new THREE.Raycaster()
   const hitGround = (nx, ny) => {
     const {camera} = XR8.Threejs.xrScene()
@@ -54,7 +56,18 @@ const scenePipeline = () => {
       const draco = new THREE.DRACOLoader()
       draco.setDecoderPath('https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/libs/draco/gltf/')
       const loader = new THREE.GLTFLoader(); loader.setDRACOLoader(draco)
-      loader.load(MODEL, (g) => { plate = g.scene; plate.visible = false; scene.add(plate) }, undefined, err)
+      loader.load(MODEL, (g) => {
+        plate = g.scene; plate.visible = false
+        // la textura de rugosidad hace brillar el arroz como hielo; la comida va mate
+        plate.traverse((o) => { if (o.isMesh) Object.assign(o.material, {roughnessMap: null, roughness: 0.85, metalness: 0, needsUpdate: true}) })
+        // sombra de contacto: un disco oscuro difuminado bajo el plato para que se vea apoyado en la mesa
+        const c = document.createElement('canvas'); c.width = c.height = 128
+        const x = c.getContext('2d'), gr = x.createRadialGradient(64, 64, 20, 64, 64, 64)
+        gr.addColorStop(0, 'rgba(0,0,0,.55)'); gr.addColorStop(1, 'rgba(0,0,0,0)'); x.fillStyle = gr; x.fillRect(0, 0, 128, 128)
+        const shadow = new THREE.Mesh(new THREE.PlaneGeometry(0.34, 0.34), new THREE.MeshBasicMaterial({map: new THREE.CanvasTexture(c), transparent: true, depthWrite: false}))
+        shadow.rotation.x = -Math.PI / 2; shadow.position.y = 0.002; plate.add(shadow)
+        scene.add(plate)
+      }, undefined, err)
 
       camera.position.set(0, CAM_H, 0)
       XR8.XrController.updateCameraProjectionMatrix({origin: camera.position, facing: camera.quaternion})
@@ -77,6 +90,9 @@ const scenePipeline = () => {
       const {camera} = XR8.Threejs.xrScene()
       if (!smooth) smooth = camera.position.clone(); else smooth.lerp(camera.position, SMOOTH)
       camera.position.copy(smooth)
+      const now = performance.now()
+      if (plate && placed) plate.rotation.y += SPIN * Math.min(0.1, (now - (last || now)) / 1000)
+      last = now
       // primera vez: el plato aparece solo donde apunta el centro de la pantalla
       if (placed || !plate || !ground) return
       const h = hitGround(0, 0)
