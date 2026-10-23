@@ -40,7 +40,7 @@ const q = new URLSearchParams(location.search)
 const CAM_H = +q.get('h') || 0.45 // m: altura asumida del celular sobre la mesa (sentado, brazo normal); menor = plato mas grande
 // grados que abarca la camara a lo largo de su lado largo (camara principal ~26 mm equivalentes); si el plato "nada" al girar, ajustar
 const LONG_FOV = +q.get('fov') || 67
-const SPIN = q.has('rot') ? +q.get('rot') : 0.35 // rad/s: el plato gira solo para mostrar todos sus lados
+const SPIN = q.has('rot') ? +q.get('rot') : 0.2 // rad/s: el plato gira solo para mostrar todos sus lados (una vuelta cada ~30 s)
 const msg = document.getElementById('msg')
 const $ = (id) => document.getElementById(id)
 
@@ -48,21 +48,28 @@ const renderer = new THREE.WebGLRenderer({canvas: $('gl'), alpha: true, antialia
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2))
 // misma luz y tono que el visor 3D (model-viewer tone-mapping="neutral"), para que el plato se vea igual en los dos
 renderer.toneMapping = THREE.NeutralToneMapping
-renderer.toneMappingExposure = 1.4 // con material mate el arroz y el plato quedan blancos, como en la referencia
+renderer.toneMappingExposure = +q.get('exp') || 0.85 // mas alto se ve mas blanco que un plato real bajo la luz de la sala
+renderer.shadowMap.enabled = true
 const scene = new THREE.Scene()
 scene.environment = new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(), 0.04).texture
 const camera = new THREE.PerspectiveCamera(65, 1, 0.01, 50)
 camera.position.set(0, CAM_H, 0)
-const ground = new THREE.Mesh(new THREE.PlaneGeometry(50, 50), new THREE.MeshBasicMaterial({visible: false}))
-ground.rotation.x = -Math.PI / 2
+// la mesa: invisible, solo recibe la sombra del plato
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(50, 50), new THREE.ShadowMaterial({opacity: 0.75}))
+ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true
 scene.add(ground)
+// luz del techo, arriba y detras del plato: la sombra cae hacia quien mira, como la de un plato real en la mesa
+const sun = new THREE.DirectionalLight(0xffe8d0, 1.5); sun.castShadow = true // calida, como los focos de una sala
+Object.assign(sun.shadow.camera, {left: -0.4, right: 0.4, top: 0.4, bottom: -0.4, near: 0.1, far: 3})
+sun.shadow.mapSize.set(1024, 1024); sun.shadow.radius = 4; sun.shadow.bias = -0.0005
+scene.add(sun, sun.target)
 
-// sombra de contacto: mancha radial suave bajo el plato
+// sombra de contacto: oscurece justo donde el plato toca la mesa
 const sc = document.createElement('canvas'); sc.width = sc.height = 128
 const g2 = sc.getContext('2d'), gr = g2.createRadialGradient(64, 64, 8, 64, 64, 64)
-gr.addColorStop(0, 'rgba(0,0,0,.6)'); gr.addColorStop(1, 'rgba(0,0,0,0)')
+gr.addColorStop(0, 'rgba(0,0,0,.5)'); gr.addColorStop(0.55, 'rgba(0,0,0,.35)'); gr.addColorStop(1, 'rgba(0,0,0,0)')
 g2.fillStyle = gr; g2.fillRect(0, 0, 128, 128)
-const shadow = new THREE.Mesh(new THREE.PlaneGeometry(0.4, 0.4), new THREE.MeshBasicMaterial({map: new THREE.CanvasTexture(sc), transparent: true, depthWrite: false}))
+const shadow = new THREE.Mesh(new THREE.PlaneGeometry(0.32, 0.32), new THREE.MeshBasicMaterial({map: new THREE.CanvasTexture(sc), transparent: true, depthWrite: false}))
 shadow.rotation.x = -Math.PI / 2; shadow.visible = false
 scene.add(shadow)
 
@@ -106,7 +113,10 @@ const setScale = (s) => {
   plate.scale.setScalar(Math.min(4, Math.max(0.4, s)))
   shadow.scale.setScalar(plate.scale.x)
 }
-const setPos = (p) => { plate.position.copy(p); shadow.position.set(p.x, 0.001, p.z) }
+const setPos = (p) => {
+  plate.position.copy(p); shadow.position.set(p.x, 0.001, p.z)
+  sun.target.position.copy(p); sun.position.set(p.x, 0.45, p.z - 0.75) // ~30 grados de alto; -z = mas lejos de quien mira al inicio
+}
 
 const draco = new DRACOLoader()
 draco.setDecoderPath('https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/libs/draco/gltf/')
@@ -115,8 +125,14 @@ loader.load('fritada.glb', (g) => {
   plate = g.scene; plate.visible = false; scene.add(plate)
   // nitidez de las texturas al mirar el plato en angulo
   plate.traverse((o) => { const m = o.material; if (m) for (const k of ['map', 'normalMap']) if (m[k]) m[k].anisotropy = renderer.capabilities.getMaxAnisotropy() })
-  // la textura de rugosidad hace brillar el arroz como hielo; la comida va mate
-  plate.traverse((o) => { if (o.isMesh) Object.assign(o.material, {roughnessMap: null, roughness: 0.85, metalness: 0, needsUpdate: true}) })
+  plate.traverse((o) => {
+    if (!o.isMesh) return
+    o.castShadow = true
+    // la textura de rugosidad hace brillar el arroz como hielo; la comida va mate
+    Object.assign(o.material, {roughnessMap: null, roughness: 0.85, metalness: 0, needsUpdate: true})
+    // tono calido de la luz de una sala (medido en la foto de un plato real: blanco crema, no blanco azulado)
+    o.material.color.set(q.get('tint') ? '#' + q.get('tint') : 0xffecd8)
+  })
 }, undefined, (e) => { msg.textContent = 'No cargo el plato: ' + e.message })
 
 const ray = new THREE.Raycaster()
