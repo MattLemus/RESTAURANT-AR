@@ -31,7 +31,8 @@
   <a id="slam" class="cta" href="fritada-ar.html">Ver en mi mesa (AR)</a>
   <!-- Safari abre Quick Look solo si el enlace tiene rel="ar" y una <img> como unico elemento hijo (el texto si se permite).
        shortcut: en navegadores dentro de apps (Instagram, Facebook) Quick Look no existe y solo se abre el archivo; si hace falta, mandarlos al giroscopio -->
-  <a id="ql" class="cta" rel="ar" href="fritada.usdz"><img alt="" width="1" height="1" src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==">Ver en mi mesa (AR)</a>
+  <!-- allowsContentScaling=0: sin pellizco, el plato queda a tamano real. El aviso "View in AR?" lo pone Safari siempre (WebKit), no se puede quitar -->
+  <a id="ql" class="cta" rel="ar" href="fritada.usdz#allowsContentScaling=0&custom=https://mattlemus.github.io/RESTAURANT-AR/banner-fritada.html&customHeight=small"><img alt="" width="1" height="1" src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==">Ver en mi mesa (AR)</a>
 </div>
 <script>
   const mv = document.querySelector('model-viewer')
