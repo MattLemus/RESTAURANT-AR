@@ -9,16 +9,17 @@
   body{margin:0;font-family:system-ui,sans-serif}
   .cta{padding:14px 22px;font:inherit;font-size:18px;border:0;border-radius:28px;background:#111;color:#fff;text-decoration:none;text-align:center;white-space:nowrap}
   #ar{position:absolute;bottom:16px;left:50%;transform:translateX(-50%)}
-  #slam{display:none;margin:12px auto}
+  #slam,#ql{display:none;margin:12px auto}
 </style>
 </head>
 <body>
 <!-- Cada celular usa lo mejor que soporte: iPhone = Quick Look (ARKit) con fritada.usdz; Android con ARCore = WebXR;
-     el resto = fritada-ar.html (giroscopio, como Snapchat sin ARCore; fritada-mesa.html = tarjeta como ancla). Scene Viewer queda fuera: se cierra solo en celulares sin ARCore.
+     el resto = fritada-ar.html (giroscopio, como Snapchat sin ARCore). Scene Viewer queda fuera: se cierra solo en celulares sin ARCore.
      isSessionSupported('immersive-ar') da true en esos celulares, asi que la falla se detecta al intentar abrir el AR.
+     iPhone usa el enlace nativo de Apple (#ql), no el de model-viewer: su deteccion fallo en un iPhone con iOS 26 y lo mandaba al giroscopio.
      fritada.usdz sale de fritada.glb con Blender (glb_to_usdz.py): 27 cm, Y arriba, metros. -->
-<model-viewer src="fritada.glb" ios-src="fritada.usdz"
-  ar ar-modes="webxr quick-look"
+<model-viewer src="fritada.glb"
+  ar ar-modes="webxr"
   ar-scale="fixed" ar-placement="floor"
   camera-controls tone-mapping="neutral" shadow-intensity="1"
   alt="Fritada"
@@ -26,12 +27,19 @@
   <!-- model-viewer solo lo muestra si el celular puede abrir AR -->
   <button id="ar" class="cta" slot="ar-button">Ver en mi mesa (AR)</button>
 </model-viewer>
-<div style="text-align:center"><a id="slam" class="cta" href="fritada-ar.html">Ver en mi mesa (AR)</a></div>
+<div style="text-align:center">
+  <a id="slam" class="cta" href="fritada-ar.html">Ver en mi mesa (AR)</a>
+  <!-- Safari abre Quick Look solo si el enlace tiene rel="ar" y una <img> como unico elemento hijo (el texto si se permite).
+       shortcut: en navegadores dentro de apps (Instagram, Facebook) Quick Look no existe y solo se abre el archivo; si hace falta, mandarlos al giroscopio -->
+  <a id="ql" class="cta" rel="ar" href="fritada.usdz"><img alt="" width="1" height="1" src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==">Ver en mi mesa (AR)</a>
+</div>
 <script>
   const mv = document.querySelector('model-viewer')
+  const ios = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+  if (ios) document.getElementById('ql').style.display = 'inline-block'
   mv.addEventListener('ar-status', (e) => { if (e.detail.status === 'failed') location.href = 'fritada-ar.html' })
   // sin boton de AR nativo (Android sin WebXR, Firefox...): ofrecer la version con giroscopio
-  mv.addEventListener('load', () => { if (!mv.canActivateAR) document.getElementById('slam').style.display = 'inline-block' })
+  mv.addEventListener('load', () => { if (!ios && !mv.canActivateAR) document.getElementById('slam').style.display = 'inline-block' })
 </script>
 </body>
 </html>
