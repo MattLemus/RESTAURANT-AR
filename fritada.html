@@ -40,7 +40,13 @@
 <script>
   const mv = document.querySelector('model-viewer')
   const ios = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
-  if (ios) { document.getElementById('ql').style.display = 'inline-block'; document.getElementById('tip').style.display = 'block' }
+  const ql = document.getElementById('ql')
+  if (ios) {
+    ql.style.display = 'inline-block'; document.getElementById('tip').style.display = 'block'
+    // acceso directo: abre Quick Look al cargar (WebKit no pide toque para rel="ar" desde 2024, pero siempre muestra su aviso);
+    // relList.supports('ar') es la deteccion que recomienda Apple: falso en navegadores de apps, que solo bajarian el archivo
+    if (ql.relList.supports('ar')) ql.click()
+  }
   mv.addEventListener('ar-status', (e) => { if (e.detail.status === 'failed') location.href = 'fritada-ar.html' })
   // sin boton de AR nativo (Android sin WebXR, Firefox...): ofrecer la version con giroscopio
   mv.addEventListener('load', () => { if (!ios && !mv.canActivateAR) document.getElementById('slam').style.display = 'inline-block' })
