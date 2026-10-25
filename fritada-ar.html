@@ -6,14 +6,17 @@
 <title>Fritada AR</title>
 <style>
   html,body{margin:0;height:100%;overflow:hidden;background:#000;font-family:system-ui,sans-serif;-webkit-tap-highlight-color:transparent}
-  #cam,#gl{position:fixed;inset:0;width:100%;height:100%}
-  #cam{object-fit:cover}
+  #cam,#gl,#dbg{position:fixed;inset:0;width:100%;height:100%}
+  #cam{object-fit:cover} #dbg{pointer-events:none}
   .ui{position:fixed;display:flex;flex-direction:column;align-items:center;gap:6px;color:#fff;font-size:14px;text-decoration:none}
   .btn{width:52px;height:52px;border-radius:50%;background:rgba(30,30,30,.82);display:grid;place-items:center;border:0;padding:0}
   .btn svg{width:26px;height:26px;fill:none;stroke:#fff;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
   #close{top:16px;right:16px} #three{top:84px;right:16px}
   #rot{right:16px;bottom:18px}
   #msg{position:fixed;left:12px;right:12px;top:16px;padding:10px 14px;border-radius:12px;background:rgba(0,0,0,.6);color:#fff;font-size:15px;text-align:center;pointer-events:none;transition:opacity .6s}
+  /* aro donde se toca, como el de Snapchat */
+  .ring{position:fixed;width:64px;height:64px;margin:-32px 0 0 -32px;border:3px solid #fff;border-radius:50%;background:rgba(255,255,255,.3);pointer-events:none;animation:ring .5s ease-out forwards}
+  @keyframes ring{from{transform:scale(.5);opacity:1}to{transform:scale(1.3);opacity:0}}
 </style>
 <script type="importmap">
 {"imports": {
@@ -25,13 +28,15 @@
 <body>
 <video id="cam" autoplay playsinline muted></video>
 <canvas id="gl"></canvas>
+<canvas id="dbg" hidden></canvas>
 <a id="close" class="ui btn" href="fritada.html" aria-label="Cerrar"><svg viewBox="0 0 24 24"><path d="M5 5l14 14M19 5L5 19"/></svg></a>
 <a id="three" class="ui btn" href="fritada.html" aria-label="Ver en 3D"><svg viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9zM12 12l8-4.5M12 12v9M12 12L4 7.5"/></svg></a>
 <button id="rot" class="ui" style="background:none;border:0"><span class="btn"><svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.5-5.8M20 4v5h-5"/></svg></span>Rotar</button>
-<div id="msg">Apunta a la mesa. Toca para mover el plato; con dos dedos cambias su tamaño.</div>
+<div id="msg">Apunta a la mesa y acércate o rodea el plato. Toca la mesa para moverlo; con dos dedos cambias su tamaño y lo giras.</div>
 <script type="module">
-// AR de 3 grados de libertad (lo mismo que hace Snapchat en celulares sin ARCore): video de la camara + plato 3D girado por el giroscopio.
-// shortcut: no sigue el desplazamiento del celular (solo la rotacion); eso solo es posible con ARCore/ARKit
+// AR como el de Snapchat en celulares sin ARCore: video de la camara + plato 3D. El giroscopio dice hacia donde mira el celular
+// y los puntos de la mesa seguidos en el video dicen cuanto se movio, asi el plato queda quieto en la mesa al acercarse o rodearlo.
+// shortcut: la altura del celular sobre la mesa es supuesta (?h=), asi que la escala del mundo es aproximada; exacta solo con ARCore/ARKit
 import * as THREE from 'three'
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js'
 import {DRACOLoader} from 'three/addons/loaders/DRACOLoader.js'
@@ -39,7 +44,7 @@ const q = new URLSearchParams(location.search)
 const CAM_H = +q.get('h') || 0.45 // m: altura asumida del celular sobre la mesa (sentado, brazo normal); menor = plato mas grande
 // grados que abarca la camara a lo largo de su lado largo (camara principal ~26 mm equivalentes); si el plato "nada" al girar, ajustar
 const LONG_FOV = +q.get('fov') || 67
-const SPIN = q.has('rot') ? +q.get('rot') : 0.2 // rad/s: el plato gira solo para mostrar todos sus lados (una vuelta cada ~30 s)
+const SPIN = +q.get('rot') || 0 // rad/s: giro automatico del plato (apagado: un plato real no gira; se rodea caminando)
 const msg = document.getElementById('msg')
 const $ = (id) => document.getElementById(id)
 
@@ -54,7 +59,7 @@ scene.add(new THREE.HemisphereLight(0xffffff, 0x8a7f74, +q.get('amb') || 3))
 const camera = new THREE.PerspectiveCamera(65, 1, 0.01, 50)
 camera.position.set(0, CAM_H, 0)
 // la mesa: invisible, solo recibe la sombra del plato
-const ground = new THREE.Mesh(new THREE.PlaneGeometry(50, 50), new THREE.ShadowMaterial({opacity: 0.75}))
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(50, 50), new THREE.ShadowMaterial({opacity: 0.55}))
 ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true
 scene.add(ground)
 // luz del techo, arriba y detras del plato: la sombra cae hacia quien mira, como la de un plato real en la mesa
@@ -95,6 +100,7 @@ let gotGyro = false, yaw0 = null
 // el giroscopio llega a ~25 lecturas/s en celulares como el Honor; se guardan las dos ultimas para predecir el giro en cada cuadro
 const qPrev = new THREE.Quaternion(), qLast = new THREE.Quaternion(), qStep = new THREE.Quaternion(), qId = new THREE.Quaternion()
 let tPrev = 0, tLast = 0
+const hist = [] // [hora, orientacion] de las ultimas lecturas: hacia donde miraba el celular cuando se tomo cada cuadro del video
 addEventListener('deviceorientation', (e) => {
   if (e.alpha == null) return
   gotGyro = true
@@ -103,7 +109,9 @@ addEventListener('deviceorientation', (e) => {
   const orient = d(screen.orientation ? screen.orientation.angle : 0)
   eul.set(d(e.beta), d(e.alpha) - yaw0, -d(e.gamma), 'YXZ')
   qPrev.copy(qLast); tPrev = tLast
-  qLast.setFromEuler(eul).multiply(q1).multiply(tmp.setFromAxisAngle(zee, -orient)); tLast = performance.now()
+  qLast.setFromEuler(eul).multiply(q1).multiply(tmp.setFromAxisAngle(zee, -orient))
+  tLast = e.timeStamp || performance.now() // hora en que llego el dato, aunque el codigo corra mas tarde por estar siguiendo puntos
+  hist.push([tLast, qLast.clone()]); if (hist.length > 20) hist.shift()
 })
 // sigue girando a la misma velocidad que entre las dos ultimas lecturas (como mucho 1.5 intervalos, para no pasarse si el celular se detiene)
 const predictCamera = () => {
@@ -113,21 +121,61 @@ const predictCamera = () => {
   qStep.copy(qLast).multiply(tmp.copy(qPrev).invert()) // giro de la lectura anterior a la ultima
   camera.quaternion.copy(qId).slerp(qStep, f).multiply(qLast)
 }
+const gyroAt = (t, out) => { // orientacion a la hora t, interpolada entre las dos lecturas que la rodean
+  let i = hist.length - 1
+  while (i > 0 && hist[i][0] > t) i--
+  const a = hist[i], b = hist[i + 1]
+  return b ? out.copy(a[1]).slerp(b[1], Math.max(0, (t - a[0]) / (b[0] - a[0]))) : out.copy(a[1])
+}
 // iOS exige un permiso tras un toque; Chrome Android 155 tambien expone requestPermission, por eso se escucha siempre
 if (typeof DeviceOrientationEvent !== 'undefined' && DeviceOrientationEvent.requestPermission) {
   addEventListener('touchend', () => DeviceOrientationEvent.requestPermission().catch(() => {}), {once: true})
 }
 setTimeout(() => { if (!gotGyro) msg.textContent = 'Este celular no entrega datos del giroscopio.' }, 2500)
 
-let plate, placed = false
+// --- seguimiento de la mesa: corre en fritada-track.js, en otro hilo (en el hilo principal trababa el dibujo en el Honor) ---
+// cada cuadro del video, reducido, va al seguidor junto con la orientacion del giroscopio cuando se tomo; vuelve la posicion
+// del celular y una pequena correccion de orientacion. Si el seguidor esta ocupado, ese cuadro se salta.
+const TW = 320 // px del lado largo del video al seguir puntos: alcanza para la veta de la mesa y es rapido en celulares modestos
+const cam = $('cam'), DEBUG = q.has('debug'), tracker = new Worker('fritada-track.js')
+tracker.postMessage({h: CAM_H, fov: LONG_FOV})
+let busy = false, tracking = false, trackT = 0, shownT = 0 // shownT: hora en que se tomo el cuadro que se esta viendo
+const camTarget = camera.position.clone(), qCorr = new THREE.Quaternion(), qVis = new THREE.Quaternion(), qSend = new THREE.Quaternion(), qShown = new THREE.Quaternion()
+const onFrame = (now, meta) => {
+  cam.requestVideoFrameCallback(onFrame)
+  const t = shownT = meta.captureTime || now
+  if (busy || !gotGyro || !cam.videoWidth) return
+  busy = true
+  const k = TW / Math.max(cam.videoWidth, cam.videoHeight)
+  createImageBitmap(cam, {resizeWidth: Math.round(cam.videoWidth * k), resizeHeight: Math.round(cam.videoHeight * k)})
+    .then((bmp) => tracker.postMessage({bmp, t, q: gyroAt(t, qSend).toArray(), debug: DEBUG}, [bmp]))
+    .catch(() => (busy = false))
+}
+tracker.onmessage = ({data: m}) => {
+  busy = false; tracking = m.tracking
+  if (tracking) { camTarget.fromArray(m.c); qCorr.fromArray(m.qc); qVis.fromArray(m.qv); trackT = performance.now() }
+  if (DEBUG) drawDebug(m)
+}
+if (cam.requestVideoFrameCallback) cam.requestVideoFrameCallback(onFrame) // sin esto (navegadores viejos) queda solo el giroscopio
+const drawDebug = (m) => { // ?debug: los puntos seguidos (verde), la posicion del celular y cuanto tarda cada cuadro
+  const c = $('dbg'), x = c.getContext('2d'), tw = Math.round(cam.videoWidth * TW / Math.max(cam.videoWidth, cam.videoHeight)), th = Math.round(cam.videoHeight * TW / Math.max(cam.videoWidth, cam.videoHeight))
+  const s = Math.max(innerWidth / tw, innerHeight / th)
+  c.hidden = false; c.width = innerWidth; c.height = innerHeight; x.fillStyle = '#0f0'
+  for (let i = 0; i < m.xy.length; i += 2) x.fillRect((m.xy[i] - tw / 2) * s + innerWidth / 2 - 2, (m.xy[i + 1] - th / 2) * s + innerHeight / 2 - 2, 4, 4)
+  msg.style.opacity = 1; msg.textContent = `${m.n} puntos  x ${m.c[0].toFixed(2)}  y ${m.c[1].toFixed(2)}  z ${m.c[2].toFixed(2)}  ${m.ms.toFixed(0)} ms`
+  window.dbg = {camTarget, qVis, n: m.n, ms: m.ms, strip: m.strip}; window.dbgHook?.() // para pruebas automaticas: pose y cuadro recien procesados
+}
+
+let plate, placed = false, baseY = 0, dropT = 0
 const setScale = (s) => {
   plate.scale.setScalar(Math.min(4, Math.max(0.4, s)))
   shadow.scale.setScalar(plate.scale.x)
 }
 const setPos = (p) => {
   plate.position.copy(p); shadow.position.set(p.x, 0.001, p.z)
-  sun.target.position.copy(p); sun.position.set(p.x, 0.45, p.z - 0.75) // ~30 grados de alto; -z = mas lejos de quien mira al inicio
+  sun.target.position.copy(p); sun.position.set(p.x, 0.7, p.z - 0.6) // mas alto = sombra mas corta bajo el plato; -z = mas lejos de quien mira
 }
+const drop = (p) => { setPos(p); baseY = p.y; dropT = performance.now() } // aparece cayendo un poco en p
 
 const draco = new DRACOLoader()
 draco.setDecoderPath('https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/libs/draco/gltf/')
@@ -152,26 +200,50 @@ const hitGround = (cx, cy) => {
   ray.setFromCamera(new THREE.Vector2((cx / innerWidth) * 2 - 1, -(cy / innerHeight) * 2 + 1), camera)
   return ray.intersectObject(ground)[0]
 }
+const ripple = (x, y) => { const r = document.body.appendChild(document.createElement('div')); r.className = 'ring'; r.style.left = x + 'px'; r.style.top = y + 'px'; setTimeout(() => r.remove(), 600) }
 const dist = (e) => Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY)
-let d0, s0
+const angle = (e) => Math.atan2(e.touches[1].clientY - e.touches[0].clientY, e.touches[1].clientX - e.touches[0].clientX)
+let d0, s0, a0, r0, tap = null, grab = null
 addEventListener('touchstart', (e) => {
   if (!plate || e.target.closest('.ui')) return
-  if (e.touches.length === 2) { d0 = dist(e); s0 = plate.scale.x; return }
-  const h = hitGround(e.touches[0].clientX, e.touches[0].clientY)
-  if (h) setPos(h.point)
+  if (e.touches.length === 2) { tap = grab = null; d0 = dist(e); s0 = plate.scale.x; a0 = angle(e); r0 = plate.rotation.y; return }
+  const t = e.touches[0], h = hitGround(t.clientX, t.clientY)
+  tap = {x: t.clientX, y: t.clientY, t: performance.now()}
+  // tocando el plato se lo arrastra con el dedo (se guarda la distancia del dedo a su centro para que no salte)
+  grab = placed && h && h.point.distanceTo(plate.position) < 0.16 * plate.scale.x ? plate.position.clone().sub(h.point) : null
 })
-addEventListener('touchmove', (e) => { if (plate && e.touches.length === 2) setScale(s0 * dist(e) / d0) })
+addEventListener('touchmove', (e) => {
+  if (!plate) return
+  if (e.touches.length === 2) { setScale(s0 * dist(e) / d0); plate.rotation.y = r0 - (angle(e) - a0); return } // pellizco: tamano; giro de dedos: rota
+  const t = e.touches[0], h = grab && hitGround(t.clientX, t.clientY)
+  if (tap && Math.hypot(t.clientX - tap.x, t.clientY - tap.y) > 12) tap = null
+  if (h) setPos(h.point.add(grab))
+})
+addEventListener('touchend', (e) => {
+  // toque corto en la mesa: el plato salta ahi. Al soltar y no al apoyar, para que el primer dedo de un pellizco no lo mueva
+  if (tap && !grab && !e.touches.length && performance.now() - tap.t < 400) { const h = hitGround(tap.x, tap.y); if (h) { drop(h.point); ripple(tap.x, tap.y) } }
+  tap = null
+})
+// pantalla completa al primer toque: sin la barra de Chrome, como la camara de Snapchat
+addEventListener('touchend', () => document.documentElement.requestFullscreen?.().catch(() => {}), {once: true})
 $('rot').onclick = () => plate && (plate.rotation.y += Math.PI / 4)
 
 const clock = new THREE.Clock()
 renderer.setAnimationLoop(() => {
   const dt = Math.min(0.1, clock.getDelta())
-  predictCamera()
-  if (placed) plate.rotation.y += SPIN * dt
+  // con la mesa a la vista: el giroscopio en el cuadro que se ve + la correccion medida (el plato queda pegado al video); sin ella, solo el giroscopio
+  if (tracking && performance.now() - trackT < 300) { camera.quaternion.multiplyQuaternions(qCorr, gyroAt(shownT, qShown)); camera.position.copy(camTarget) } else predictCamera()
+  if (placed) {
+    plate.rotation.y += SPIN * dt
+    // caida suave al aparecer (~400 ms): baja desde 12 cm con un rebote leve, para que se sienta vivo
+    const e = (performance.now() - dropT) / 400
+    if (e < 1) { const k = 1 - Math.pow(1 - e, 3); plate.position.y = baseY + 0.12 * (1 - k); shadow.material.opacity = k }
+    else if (shadow.material.opacity < 1) { plate.position.y = baseY; shadow.material.opacity = 1 }
+  }
   // primera vez: el plato aparece donde apunta el centro de la pantalla, cuando ya hay giroscopio
   if (!placed && plate && gotGyro) {
     const h = hitGround(innerWidth / 2, innerHeight / 2)
-    if (h) { setPos(h.point); setScale(1); plate.visible = shadow.visible = placed = true; setTimeout(() => (msg.style.opacity = 0), 5000) }
+    if (h) { drop(h.point); setScale(1); plate.visible = shadow.visible = placed = true; setTimeout(() => (msg.style.opacity = 0), 6000) }
   }
   renderer.render(scene, camera)
 })
