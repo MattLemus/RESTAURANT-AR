@@ -1,5 +1,5 @@
 # blender -b --factory-startup -P make_web_glb.py -- ../ar/fritada.glb fritada.glb
-# Modelo anterior (un solo bloque). El fritada.glb actual sale de make_fritada.py; esto lo sobrescribiria.
+# Modelo de un solo bloque (el de fritada.html). La fritada por ingredientes sale de make_fritada.py.
 # fritada.glb para la web a partir del original (ar/fritada.glb, 17 MB): apoyado en la mesa (base en y=0), centrado, 27 cm.
 # La textura es un mosaico de trocitos: con la compresion por defecto (Draco 12 bits en UV, JPEG fuerte) se mezclaban
 # trocitos vecinos y el queso/arroz se veia gris y "brilloso" como hielo. Por eso UV a 16 bits y JPEG 95.

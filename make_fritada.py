@@ -1,7 +1,8 @@
 # python3 make_fritada.py           (despues de make_pieces.py; bpy 5.2 de pip y usd-core para el USDZ)
 # Arma la fritada como los pancakes de la galeria de Apple: una pieza por ingrediente, copias que comparten malla y
 # textura (como sus 20 arandanos), plato modelado (make_plate.py, rugosidad 0,27 como el de Apple) con la sombra de
-# la comida horneada en un mapa de oclusion (su plate_ao). Sale fritada.glb (web/Android) y fritada.usdz (iPhone).
+# la comida horneada en un mapa de oclusion (su plate_ao). Sale fritada-nueva.glb (web/Android) y fritada-nueva.usdz
+# (iPhone), que usa la pagina de prueba fritada-nueva.html; la del QR (fritada.html) sigue con fritada.glb/usdz.
 # Distribucion copiada del plato original (ar/fritada.glb). Coordenadas de Blender en cm: x derecha, y fondo, z arriba.
 import math
 import os
@@ -13,6 +14,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 BUILD = os.path.join(HERE, 'piezas', 'build')
 TMP = os.path.join(BUILD, 'tmp')
+NAME = 'fritada-nueva'
 
 
 def finish_usdz(usdc, usdz):
@@ -312,7 +314,7 @@ for o in meshes:
         print('FUERA', o.name, round(out * 100, 1), 'cm')
 print('ESCENA', len(meshes), 'objetos', sum(len(p.vertices) - 2 for o in meshes for p in o.data.polygons), 'triangulos')
 
-bpy.ops.export_scene.gltf(filepath=os.path.join(HERE, 'fritada.glb'), export_format='GLB', export_image_format='JPEG',
+bpy.ops.export_scene.gltf(filepath=os.path.join(HERE, NAME + '.glb'), export_format='GLB', export_image_format='JPEG',
                           export_jpeg_quality=90, export_cameras=False, export_lights=False)
 usdc = os.path.join(TMP, 'usd', 'fritada.usdc')
 bpy.ops.wm.usd_export(filepath=usdc, export_materials=True, generate_preview_surface=True, export_textures_mode='NEW',
@@ -320,5 +322,5 @@ bpy.ops.wm.usd_export(filepath=usdc, export_materials=True, generate_preview_sur
                       export_global_up_selection='Y', export_cameras=False, export_lights=False,
                       convert_world_material=False, triangulate_meshes=True, accessibility_label='Fritada')
 shutil.copy(ao_path, os.path.join(TMP, 'usd', 'textures', 'plato_ao.png'))   # Blender no la exporta (no va al BSDF)
-subprocess.run([sys.executable, '-I', os.path.abspath(__file__), '--usdz', usdc, os.path.join(HERE, 'fritada.usdz')],
+subprocess.run([sys.executable, '-I', os.path.abspath(__file__), '--usdz', usdc, os.path.join(HERE, NAME + '.usdz')],
                check=True)

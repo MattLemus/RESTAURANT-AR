@@ -18,8 +18,7 @@
      el resto = fritada-ar.html (giroscopio, como Snapchat sin ARCore). Scene Viewer queda fuera: se cierra solo en celulares sin ARCore.
      isSessionSupported('immersive-ar') da true en esos celulares, asi que la falla se detecta al intentar abrir el AR.
      iPhone usa el enlace nativo de Apple (#ql), no el de model-viewer: su deteccion fallo en un iPhone con iOS 26 y lo mandaba al giroscopio.
-     fritada.glb y fritada.usdz salen de make_fritada.py (una pieza por ingrediente, como los modelos de la galeria
-     de Apple): 26 cm, Y arriba, metros. -->
+     fritada.usdz sale de fritada.glb con Blender (glb_to_usdz.py): 27 cm, Y arriba, metros. -->
 <model-viewer src="fritada.glb"
   ar ar-modes="webxr"
   ar-scale="fixed" ar-placement="floor"
