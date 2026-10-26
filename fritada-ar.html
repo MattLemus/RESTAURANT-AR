@@ -41,6 +41,9 @@ import * as THREE from 'three'
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js'
 import {DRACOLoader} from 'three/addons/loaders/DRACOLoader.js'
 const q = new URLSearchParams(location.search)
+// ?m=fritada-nueva.glb: otro modelo del sitio (pagina de prueba); cerrar vuelve a su pagina (fritada-nueva.html)
+const modelo = /^[\w-]+\.glb$/.test(q.get('m') || '') ? q.get('m') : 'fritada.glb'
+if (modelo !== 'fritada.glb') for (const id of ['close', 'three']) document.getElementById(id).href = modelo.replace(/\.glb$/, '.html')
 const CAM_H = +q.get('h') || 0.45 // m: altura asumida del celular sobre la mesa (sentado, brazo normal); menor = plato mas grande
 // grados que abarca la camara a lo largo de su lado largo (camara principal ~26 mm equivalentes); si el plato "nada" al girar, ajustar
 const LONG_FOV = +q.get('fov') || 67
@@ -180,7 +183,7 @@ const drop = (p) => { setPos(p); baseY = p.y; dropT = performance.now() } // apa
 const draco = new DRACOLoader()
 draco.setDecoderPath('https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/libs/draco/gltf/')
 const loader = new GLTFLoader(); loader.setDRACOLoader(draco)
-loader.load('fritada.glb', (g) => {
+loader.load(modelo, (g) => {
   plate = g.scene; plate.visible = false; scene.add(plate)
   // nitidez de las texturas al mirar el plato en angulo
   plate.traverse((o) => { const m = o.material; if (m) for (const k of ['map', 'normalMap']) if (m[k]) m[k].anisotropy = renderer.capabilities.getMaxAnisotropy() })
