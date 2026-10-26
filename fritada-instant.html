@@ -10,6 +10,8 @@
   #msg{position:fixed;left:12px;right:12px;bottom:16px;padding:10px 14px;border-radius:12px;background:rgba(0,0,0,.6);color:#fff;font-size:15px;text-align:center;pointer-events:none}
   #msg a{color:inherit;pointer-events:auto}
   #err{position:fixed;left:8px;right:8px;top:8px;color:#ff8080;font:12px monospace;white-space:pre-wrap;pointer-events:none}
+  #st{position:fixed;left:8px;top:calc(8px + env(safe-area-inset-top));padding:4px 8px;border-radius:8px;background:rgba(0,0,0,.55);color:#fff;font:12px monospace;pointer-events:none}
+  #st:empty{display:none}
   #go{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);padding:16px 26px;font:inherit;font-size:18px;border:0;border-radius:30px;background:#fff;color:#111}
 </style>
 <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
@@ -20,6 +22,8 @@
 <body>
 <canvas id="camerafeed"></canvas>
 <div id="err"></div>
+<!-- estado del permiso de movimiento y del seguimiento (prueba en iPhone): sin movimiento el motor solo sabe girar -->
+<div id="st"></div>
 <!-- iPhone solo da el giroscopio despues de un toque en la pagina (requestPermission), por eso el boton -->
 <button id="go">Ver la fritada en mi mesa</button>
 <div id="msg">Toca la mesa para mover el plato; con dos dedos cambias su tamano.<br><small style="opacity:.6">Motor AR: 8th Wall &copy; Niantic Spatial, sin garantia, <a href="https://cdn.jsdelivr.net/npm/@8thwall/engine-binary@1.0.0/dist/LICENSE">licencia</a></small></div>
@@ -29,7 +33,10 @@ const q = new URLSearchParams(location.search)
 // m: altura asumida del celular sobre la mesa; define la escala, y es lo que deja poner el plato al instante sin escanear
 // (shortcut: no mide la escala real, el pellizco la corrige). Menor que la real = plato mas grande.
 const CAM_H = +q.get('h') || 0.4
-const SMOOTH = +q.get('s') || 0.15 // 0..1, filtro de la posicion de la camara; menor = mas suave pero con mas retraso
+// 0..1, filtro de la posicion de la camara; menor = mas suave pero con retraso (el plato se arrastra al moverse).
+// 1 = sin filtro: el 0.15 era para el temblor del Honor
+const SMOOTH = +q.get('s') || 1
+const track = {status: '', motion: 0, perm: ''}
 const START_SCALE = +q.get('k') || 1
 const SPIN = +q.get('rot') || 0 // rad/s; en iPhone se camina alrededor del plato, no hace falta que gire solo
 const err = (e) => { document.getElementById('err').textContent += (e && e.message || e) + '\n' }
@@ -88,7 +95,9 @@ const scenePipeline = () => {
         if (plate && e.touches.length === 2) plate.scale.setScalar(Math.min(4, Math.max(0.4, s0 * dist(e) / d0)))
       })
     },
-    onUpdate: () => {
+    onUpdate: ({processCpuResult}) => {
+      const r = processCpuResult && processCpuResult.reality
+      if (r) track.status = r.trackingStatus === 'LIMITED' ? 'LIMITED ' + r.trackingReason : r.trackingStatus
       // suaviza solo la posicion (la rotacion viene del giroscopio, que no tiembla)
       const {camera} = XR8.Threejs.xrScene()
       if (!smooth) smooth = camera.position.clone(); else smooth.lerp(camera.position, SMOOTH)
@@ -135,13 +144,22 @@ const onxrloaded = () => {
   XR8.XrController.configure({scale: q.get('scale') || 'responsive'})
   XR8.run({canvas: document.getElementById('camerafeed'), allowedDevices: XR8.XrConfig.device().ANY})
 }
+const HINT = document.getElementById('msg').firstChild.textContent
+let motionN = 0
+addEventListener('devicemotion', () => motionN++)
 document.getElementById('go').addEventListener('click', async (e) => {
   e.target.remove()
-  // en iPhone los permisos de movimiento se piden dentro del toque; sin ellos el motor no sabe como se mueve el celular
-  for (const E of [window.DeviceMotionEvent, window.DeviceOrientationEvent]) {
-    if (E && E.requestPermission) await E.requestPermission().catch(err)
-  }
+  // en iPhone los permisos se piden dentro del toque, los dos a la vez: despues de un await ya no cuenta como toque
+  const asks = [window.DeviceMotionEvent, window.DeviceOrientationEvent].filter((E) => E && E.requestPermission)
+  track.perm = asks.length ? (await Promise.all(asks.map((E) => E.requestPermission().catch((x) => x.name)))).join('/') : 'n/a'
   window.XR8 ? onxrloaded() : window.addEventListener('xrloaded', onxrloaded)
+  let n0 = motionN
+  setInterval(() => {
+    track.motion = (motionN - n0) * 2; n0 = motionN
+    document.getElementById('st').textContent = `movimiento ${track.perm} ${track.motion}/s | ${track.status}`
+    // navegadores dentro de apps (WhatsApp, Instagram) no dan el movimiento: sin eso el plato se arrastra
+    document.getElementById('msg').firstChild.textContent = track.motion ? HINT : 'Este navegador no deja usar el movimiento del celular: abre el link en Safari o Chrome.'
+  }, 500)
 })
 </script>
 </body>
