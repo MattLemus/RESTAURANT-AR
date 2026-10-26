@@ -25,5 +25,12 @@
 <model-viewer src="fritada-lite.glb" ar ar-modes="webxr scene-viewer quick-look" ar-scale="fixed"
   camera-controls tone-mapping="neutral" shadow-intensity="1" alt="Fritada liviana">
   <button class="cta" slot="ar-button">Ver en mi mesa (prueba 2)</button>
+</model-viewer>
+<!-- 3: el iPhone ya trae la imagen de la tarjeta (tarjeta.html en el Honor acostado): la reconoce y pone el plato
+     encima sin escanear la mesa. fritada-tarjeta.usdz = fritada.usdz con anclaje a imagen (Preliminary_AnchoringAPI) -->
+<h2>Prueba 3: con la tarjeta</h2>
+<model-viewer src="fritada-lite.glb" ios-src="fritada-tarjeta.usdz" ar ar-modes="quick-look" ar-scale="fixed"
+  camera-controls tone-mapping="neutral" shadow-intensity="1" alt="Fritada con la tarjeta">
+  <button class="cta" slot="ar-button">Ver en mi mesa (prueba 3)</button>
 </model-viewer></body>
 </html>
