@@ -10,7 +10,7 @@ import bpy
 dst = sys.argv[sys.argv.index('--') + 1]
 
 A, B, N = 0.1302, 0.1165, 5.4   # semiejes (m) y redondez de las esquinas; el labio sale 0,8% mas
-SEGMENTS = 256
+SEGMENTS = 160
 
 # Perfil del plato: (s, altura en cm). s = 0 en el centro y 1 en el borde, en cualquier direccion.
 # Va por arriba del centro al borde, redondea el labio y vuelve por abajo; el pie es un anillo que toca la mesa.
@@ -82,6 +82,7 @@ for poly in mesh.polygons:
 
 mat = bpy.data.materials.new('porcelana')
 mat.use_nodes = True
+mat.use_backface_culling = True   # plato cerrado: una sola cara
 bsdf = next(n for n in mat.node_tree.nodes if n.type == 'BSDF_PRINCIPLED')
 bsdf.inputs['Base Color'].default_value = (0.855, 0.838, 0.807, 1)   # blanco calido (#EEECE8)
 bsdf.inputs['Roughness'].default_value = 0.18
