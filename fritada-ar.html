@@ -6,14 +6,15 @@
 <title>Fritada AR</title>
 <style>
   html,body{margin:0;height:100%;overflow:hidden;background:#000;font-family:system-ui,sans-serif;-webkit-tap-highlight-color:transparent}
-  #cam,#gl,#dbg{position:fixed;inset:0;width:100%;height:100%}
-  #cam{object-fit:cover} #dbg{pointer-events:none}
+  #cam,#gl{position:fixed;inset:0;width:100%;height:100%}
+  #cam{object-fit:cover}
   .ui{position:fixed;display:flex;flex-direction:column;align-items:center;gap:6px;color:#fff;font-size:14px;text-decoration:none}
   .btn{width:52px;height:52px;border-radius:50%;background:rgba(30,30,30,.82);display:grid;place-items:center;border:0;padding:0}
   .btn svg{width:26px;height:26px;fill:none;stroke:#fff;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
   #close{top:16px;right:16px} #three{top:84px;right:16px}
   #rot{right:16px;bottom:18px}
   #msg{position:fixed;left:12px;right:12px;top:16px;padding:10px 14px;border-radius:12px;background:rgba(0,0,0,.6);color:#fff;font-size:15px;text-align:center;pointer-events:none;transition:opacity .6s}
+  #dbg{position:fixed;left:8px;bottom:8px;right:84px;padding:4px 8px;border-radius:8px;background:rgba(0,0,0,.55);color:#fff;font:11px/1.35 monospace;pointer-events:none}
   /* aro donde se toca, como el de Snapchat */
   .ring{position:fixed;width:64px;height:64px;margin:-32px 0 0 -32px;border:3px solid #fff;border-radius:50%;background:rgba(255,255,255,.3);pointer-events:none;animation:ring .5s ease-out forwards}
   @keyframes ring{from{transform:scale(.5);opacity:1}to{transform:scale(1.3);opacity:0}}
@@ -26,16 +27,19 @@
 </script>
 </head>
 <body>
+<!-- el video solo entrega los cuadros; lo que se ve es el lienzo, que dibuja cada cuadro junto con el plato -->
 <video id="cam" autoplay playsinline muted></video>
 <canvas id="gl"></canvas>
-<canvas id="dbg" hidden></canvas>
 <a id="close" class="ui btn" href="fritada.html" aria-label="Cerrar"><svg viewBox="0 0 24 24"><path d="M5 5l14 14M19 5L5 19"/></svg></a>
 <a id="three" class="ui btn" href="fritada.html" aria-label="Ver en 3D"><svg viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9zM12 12l8-4.5M12 12v9M12 12L4 7.5"/></svg></a>
 <button id="rot" class="ui" style="background:none;border:0"><span class="btn"><svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.5-5.8M20 4v5h-5"/></svg></span>Rotar</button>
 <div id="msg">Apunta a la mesa y acércate o rodea el plato. Toca la mesa para moverlo; con dos dedos cambias su tamaño y lo giras.</div>
+<div id="dbg" hidden></div>
 <script type="module">
-// AR como el de Snapchat en celulares sin ARCore: video de la camara + plato 3D. El giroscopio dice hacia donde mira el celular
-// y los puntos de la mesa seguidos en el video dicen cuanto se movio, asi el plato queda quieto en la mesa al acercarse o rodearlo.
+// AR como el de Snapchat en celulares sin ARCore: camara + plato 3D. El sensor de orientacion dice hacia donde mira el celular
+// y los puntos de la mesa seguidos en la imagen dicen cuanto se movio, asi el plato queda quieto en la mesa al acercarse o rodearlo.
+// Como en Snapchat, cada cuadro de la camara se dibuja junto con la pose calculada para ESE cuadro (LOGICA_FLUIDEZ, seccion 5):
+// el plato no puede deslizarse respecto a la mesa aunque el calculo tarde, solo la imagen entera llega unos ms despues.
 // shortcut: la altura del celular sobre la mesa es supuesta (?h=), asi que la escala del mundo es aproximada; exacta solo con ARCore/ARKit
 import * as THREE from 'three'
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js'
@@ -45,14 +49,17 @@ const CAM_H = +q.get('h') || 0.45 // m: altura asumida del celular sobre la mesa
 // grados que abarca la camara a lo largo de su lado largo (camara principal ~26 mm equivalentes); si el plato "nada" al girar, ajustar
 const LONG_FOV = +q.get('fov') || 67
 const SPIN = +q.get('rot') || 0 // rad/s: giro automatico del plato (apagado: un plato real no gira; se rodea caminando)
+const RES = +q.get('res') || 1920 // px del lado largo pedidos a la camara
 const msg = document.getElementById('msg')
 const $ = (id) => document.getElementById(id)
+const DEBUG = q.has('debug')
 
-const renderer = new THREE.WebGLRenderer({canvas: $('gl'), alpha: true, antialias: true})
+const renderer = new THREE.WebGLRenderer({canvas: $('gl'), antialias: true}) // opaco: dibuja tambien la imagen de la camara
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2))
 renderer.toneMapping = THREE.NeutralToneMapping
 renderer.toneMappingExposure = +q.get('exp') || 0.85 // mas alto se ve mas blanco que un plato real bajo la luz de la sala
 renderer.shadowMap.enabled = true
+renderer.shadowMap.autoUpdate = false // la sombra solo cambia si el plato se mueve (ver shadowDirty), no cuando se mueve la camara
 const scene = new THREE.Scene()
 // luz ambiente pareja; la comida es Lambert (sin reflejos), asi que no hace falta un entorno que refleje
 scene.add(new THREE.HemisphereLight(0xffffff, 0x8a7f74, +q.get('amb') || 3))
@@ -77,101 +84,133 @@ const shadow = new THREE.Mesh(new THREE.PlaneGeometry(0.32, 0.32), new THREE.Mes
 shadow.rotation.x = -Math.PI / 2; shadow.visible = false
 scene.add(shadow)
 
-// el angulo de vision de la camara 3D debe ser el mismo que el del video que se ve en pantalla, o el plato se desliza al girar
-const resize = () => {
+// --- la imagen de la camara, dibujada en el mismo lienzo y en el mismo instante que el plato ---
+// un rectangulo que cubre la pantalla, primero y sin profundidad; muestra la parte del cuadro que entra (como object-fit:cover)
+let bgTex = null
+const bgMat = new THREE.ShaderMaterial({
+  uniforms: {map: {value: null}, crop: {value: new THREE.Vector4(0, 0, 1, 1)}}, // crop: desde (x, y) arriba-izq, ancho, alto (0..1)
+  vertexShader: 'uniform vec4 crop; varying vec2 vUv; void main() { vUv = crop.xy + vec2(uv.x, 1.0 - uv.y) * crop.zw; gl_Position = vec4(position.xy, 1.0, 1.0); }',
+  fragmentShader: 'uniform sampler2D map; varying vec2 vUv; void main() { gl_FragColor = texture2D(map, vUv); }', // colores tal cual llegan
+  depthTest: false, depthWrite: false,
+})
+const bg = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), bgMat)
+bg.frustumCulled = false; bg.renderOrder = -1; bg.visible = false
+scene.add(bg)
+let fw = 0, fh = 0 // tamano del cuadro de la camara
+// el angulo de vision de la camara 3D debe ser el mismo que el de la parte del cuadro que se ve, o el plato se desliza al girar
+const fit = () => {
   renderer.setSize(innerWidth, innerHeight, false); camera.aspect = innerWidth / innerHeight
-  const v = $('cam'), vw = v.videoWidth, vh = v.videoHeight
-  if (vw) { // object-fit:cover recorta el video; se calcula que parte de su alto queda visible
-    const perPx = Math.tan(THREE.MathUtils.degToRad(LONG_FOV) / 2) / (Math.max(vw, vh) / 2)
-    const visibleH = innerHeight / Math.max(innerWidth / vw, innerHeight / vh)
-    camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(perPx * visibleH / 2))
+  if (fw) {
+    const s = Math.max(innerWidth / fw, innerHeight / fh), vw = innerWidth / s, vh = innerHeight / s // px del cuadro que se ven
+    bgMat.uniforms.crop.value.set((1 - vw / fw) / 2, (1 - vh / fh) / 2, vw / fw, vh / fh)
+    const perPx = Math.tan(THREE.MathUtils.degToRad(LONG_FOV) / 2) / (Math.max(fw, fh) / 2)
+    camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(perPx * vh / 2))
   }
-  camera.updateProjectionMatrix()
+  camera.updateProjectionMatrix(); dirty = true
 }
-resize(); addEventListener('resize', resize); $('cam').addEventListener('resize', resize)
+const showFrame = (bmp) => { // nuevo cuadro de fondo (se sube a la GPU en el proximo dibujo)
+  if (!bgTex || bmp.width !== fw || bmp.height !== fh) { // primer cuadro o el celular giro: textura y recorte nuevos
+    bgTex?.dispose(); bgTex = new THREE.Texture(); bgTex.flipY = false; bgTex.generateMipmaps = false; bgTex.minFilter = THREE.LinearFilter
+    bgMat.uniforms.map.value = bgTex; fw = bmp.width; fh = bmp.height; fit()
+  }
+  bgTex.image = bmp; bgTex.needsUpdate = true; bg.visible = true; dirty = true
+}
+let dirty = true
+fit(); addEventListener('resize', fit)
 
-navigator.mediaDevices.getUserMedia({video: {facingMode: 'environment', width: {ideal: 1920}, height: {ideal: 1080}}})
-  .then((s) => { $('cam').srcObject = s })
+const cam = $('cam')
+navigator.mediaDevices.getUserMedia({video: {facingMode: 'environment', width: {ideal: RES}, height: {ideal: Math.round(RES * 9 / 16)}}})
+  .then((s) => { cam.srcObject = s })
   .catch((e) => { msg.textContent = 'No se pudo abrir la camara: ' + e.message })
 
-// giroscopio -> orientacion de la camara (misma formula que three DeviceOrientationControls)
+// --- sensores ---
+// orientacion (misma formula que three DeviceOrientationControls). En celulares sin giroscopio (p. ej. Honor LLY-LX3: solo
+// acelerometro + brujula) llega temblando ~0.2 grados y atrasada; por eso el plato nunca se orienta directo con ella mientras
+// se ve la mesa: el seguidor la usa como punto de partida y la corrige con la imagen
 const zee = new THREE.Vector3(0, 0, 1), q1 = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5)), tmp = new THREE.Quaternion(), eul = new THREE.Euler()
-let gotGyro = false, yaw0 = null
-// el giroscopio llega a ~25 lecturas/s en celulares como el Honor; se guardan las dos ultimas para predecir el giro en cada cuadro
-const qPrev = new THREE.Quaternion(), qLast = new THREE.Quaternion(), qStep = new THREE.Quaternion(), qId = new THREE.Quaternion()
-let tPrev = 0, tLast = 0, stepSum = 0, stepN = 0
-// Celulares sin giroscopio (el Honor: solo acelerometro + brujula) entregan una orientacion que tiembla ~0.5 grados por lectura,
-// y medio grado son ~10 px del plato en pantalla. Se mide ese ruido cuando la imagen muestra la mesa quieta; si es alto, la
-// orientacion del plato sale de la imagen (precisa) y el sensor solo se usa cuando no se ve la mesa. Empieza como ruidoso
-let sensNoise = 0.01 // rad por lectura
-const sensClean = () => sensNoise < 0.003
-const hist = [] // [hora, orientacion] de las ultimas lecturas: hacia donde miraba el celular cuando se tomo cada cuadro del video
+let gotSensor = false, yaw0 = null, hasGyro = false
+const hist = [] // [hora, orientacion] de las ultimas lecturas: hacia donde miraba el celular cuando se tomo cada cuadro
 addEventListener('deviceorientation', (e) => {
   if (e.alpha == null) return
-  gotGyro = true
+  gotSensor = true
   const d = THREE.MathUtils.degToRad
   if (yaw0 === null) yaw0 = d(e.alpha) // el norte no importa: el plato se coloca en relacion a donde miras
   const orient = d(screen.orientation ? screen.orientation.angle : 0)
   eul.set(d(e.beta), d(e.alpha) - yaw0, -d(e.gamma), 'YXZ')
-  qPrev.copy(qLast); tPrev = tLast
-  qLast.setFromEuler(eul).multiply(q1).multiply(tmp.setFromAxisAngle(zee, -orient))
-  tLast = e.timeStamp || performance.now() // hora en que llego el dato, aunque el codigo corra mas tarde por estar siguiendo puntos
-  stepSum += qLast.angleTo(qPrev); stepN++ // cuanto cambia de una lectura a la otra: con el celular quieto, es su ruido
-  hist.push([tLast, qLast.clone()]); if (hist.length > 20) hist.shift()
+  const qo = new THREE.Quaternion().setFromEuler(eul).multiply(q1).multiply(tmp.setFromAxisAngle(zee, -orient))
+  hist.push([e.timeStamp || performance.now(), qo]); if (hist.length > 30) hist.shift()
 })
-// sigue girando a la misma velocidad que entre las dos ultimas lecturas (como mucho 1.5 intervalos, para no pasarse si el celular se detiene)
-const predictGyro = (out) => {
-  const gap = tLast - tPrev
-  if (!tPrev || gap <= 0 || gap > 150) return out.copy(qLast)
-  const f = Math.min(1.5, (performance.now() - tLast) / gap)
-  qStep.copy(qLast).multiply(tmp.copy(qPrev).invert()) // giro de la lectura anterior a la ultima
-  return out.copy(qId).slerp(qStep, f).multiply(qLast)
-}
-const gyroAt = (t, out) => { // orientacion a la hora t, interpolada entre las dos lecturas que la rodean
+const sensorAt = (t, out) => { // orientacion a la hora t, interpolada entre las dos lecturas que la rodean
   let i = hist.length - 1
   while (i > 0 && hist[i][0] > t) i--
   const a = hist[i], b = hist[i + 1]
   return b ? out.copy(a[1]).slerp(b[1], Math.max(0, (t - a[0]) / (b[0] - a[0]))) : out.copy(a[1])
 }
-// iOS exige un permiso tras un toque; Chrome Android 155 tambien expone requestPermission, por eso se escucha siempre
-if (typeof DeviceOrientationEvent !== 'undefined' && DeviceOrientationEvent.requestPermission) {
-  addEventListener('touchend', () => DeviceOrientationEvent.requestPermission().catch(() => {}), {once: true})
-}
-setTimeout(() => { if (!gotGyro) msg.textContent = 'Este celular no entrega datos del giroscopio.' }, 2500)
+// giroscopio de verdad: solo lo tienen los celulares que entregan velocidad de giro. Se usa para notar un giro (quietud)
+const rates = [] // [hora, rad/s]
+addEventListener('devicemotion', (e) => {
+  const r = e.rotationRate
+  if (!r || r.alpha == null) return
+  hasGyro = true
+  rates.push([e.timeStamp || performance.now(), Math.hypot(r.alpha, r.beta, r.gamma) * Math.PI / 180]); if (rates.length > 60) rates.shift()
+})
+const rateBetween = (t0, t1) => { let s = 0, n = 0; for (const [t, v] of rates) if (t > t0 && t <= t1) { s += v; n++ } return n ? s / n : 0 }
+// iOS exige un permiso tras un toque; Chrome Android tambien expone requestPermission, por eso se escucha siempre
+addEventListener('touchend', () => {
+  if (typeof DeviceOrientationEvent !== 'undefined' && DeviceOrientationEvent.requestPermission) DeviceOrientationEvent.requestPermission().catch(() => {})
+  if (typeof DeviceMotionEvent !== 'undefined' && DeviceMotionEvent.requestPermission) DeviceMotionEvent.requestPermission().catch(() => {})
+}, {once: true})
+setTimeout(() => { if (!gotSensor) msg.textContent = 'Este celular no entrega datos del sensor de movimiento.' }, 2500)
 
-// --- seguimiento de la mesa: corre en fritada-track.js, en otro hilo (en el hilo principal trababa el dibujo en el Honor) ---
-// cada cuadro del video, reducido, va al seguidor junto con la orientacion del giroscopio cuando se tomo; vuelve la posicion
-// del celular y una pequena correccion de orientacion. Si el seguidor esta ocupado, ese cuadro se salta.
-const TW = 320 // px del lado largo del video al seguir puntos: alcanza para la veta de la mesa y es rapido en celulares modestos
-const cam = $('cam'), DEBUG = q.has('debug'), tracker = new Worker('fritada-track.js')
+// --- cuadros: captura -> seguidor (fritada-track.js, en otro hilo) -> dibujo con su pose ---
+// Un cuadro en calculo y como mucho uno esperando (el mas nuevo reemplaza al que esperaba): nunca se forma una cola de cuadros
+// viejos (LOGICA_FLUIDEZ, seccion 4). Cada cuadro se toma en dos tamanos a la vez: completo para mostrarlo, chico para seguir puntos
+const TW = 320 // px del lado largo del cuadro chico: alcanza para la veta de la mesa y es rapido en celulares modestos
+const tracker = new Worker('fritada-track.js')
 tracker.postMessage({h: CAM_H, fov: LONG_FOV})
-let busy = false, trackT = -1e9, shownT = 0 // shownT: hora en que se tomo el cuadro que se esta viendo
-const camTarget = camera.position.clone(), qCorr = new THREE.Quaternion(), qVis = new THREE.Quaternion(), qSend = new THREE.Quaternion(), qShown = new THREE.Quaternion()
-const onFrame = (now, meta) => {
-  cam.requestVideoFrameCallback(onFrame)
-  const t = shownT = meta.captureTime || now
-  if (busy || !gotGyro || !cam.videoWidth) return
-  busy = true
-  const k = TW / Math.max(cam.videoWidth, cam.videoHeight)
-  createImageBitmap(cam, {resizeWidth: Math.round(cam.videoWidth * k), resizeHeight: Math.round(cam.videoHeight * k)})
-    .then((bmp) => tracker.postMessage({bmp, t, q: gyroAt(t, qSend).toArray(), debug: DEBUG}, [bmp]))
-    .catch(() => (busy = false))
+let capturing = false, active = null, pending = null, nextId = 0, shown = null, capMs = 0
+const retire = [] // cuadros ya reemplazados en pantalla: se liberan despues del dibujo que sube el nuevo
+const drop = (f) => { f.full.close(); f.small?.close() }
+const send = (f) => {
+  if (!gotSensor) { f.small.close(); f.small = null; return present(f, null) } // sin sensor no hay seguimiento: se muestra la camara igual
+  active = f; f.sent = performance.now()
+  tracker.postMessage({id: f.id, bmp: f.small, t: f.t, q: sensorAt(f.t, tmp).toArray(), gyro: hasGyro, debug: DEBUG}, [f.small]); f.small = null
 }
+const onFrame = (now, meta) => {
+  if (cam.requestVideoFrameCallback) cam.requestVideoFrameCallback(onFrame); else requestAnimationFrame(pollFrame)
+  if (capturing || !cam.videoWidth) return
+  if (active && performance.now() - active.sent > 2000) { drop(active); active = null } // el seguidor no respondio: no trabar todo
+  const t = meta?.captureTime || now, k = TW / Math.max(cam.videoWidth, cam.videoHeight), c0 = performance.now()
+  capturing = true
+  Promise.all([createImageBitmap(cam), createImageBitmap(cam, {resizeWidth: Math.round(cam.videoWidth * k), resizeHeight: Math.round(cam.videoHeight * k), resizeQuality: 'medium'})])
+    .then(([full, small]) => {
+      capturing = false; capMs = capMs * 0.9 + (performance.now() - c0) * 0.1
+      const f = {id: ++nextId, t, full, small}
+      if (!active) send(f)
+      else { if (pending) drop(pending); pending = f }
+    })
+    .catch(() => (capturing = false))
+}
+let lastVT = -1 // navegadores sin requestVideoFrameCallback: se mira si cambio el cuadro en cada repintado
+const pollFrame = (now) => { if (cam.currentTime !== lastVT) { lastVT = cam.currentTime; onFrame(now) } else requestAnimationFrame(pollFrame) }
+if (cam.requestVideoFrameCallback) cam.requestVideoFrameCallback(onFrame); else requestAnimationFrame(pollFrame)
 tracker.onmessage = ({data: m}) => {
-  busy = false
-  if (m.tracking) { camTarget.fromArray(m.c); qCorr.fromArray(m.qc); qVis.fromArray(m.qv); trackT = performance.now(); observe(m) }
-  else stillSince = 0 // un cuadro dudoso no cuenta como quietud, pero tampoco cambia de fuente (sigue la ultima pose buena)
-  if (DEBUG) drawDebug(m)
+  const f = active
+  if (!f || f.id !== m.id) return // respuesta de un cuadro ya descartado
+  active = null
+  if (pending) { const p = pending; pending = null; send(p) } // el siguiente empieza ya, mientras este se dibuja
+  present(f, m)
 }
 
-// --- quietud y presentacion (LOGICA_ESTABILIDAD_3D_SIN_TEMBLORES.md) ---
-// Tres poses separadas: la medida (camTarget/qVis), la objetivo y la dibujada (camera). Con el celular quieto (la mesa no se
-// mueve en la imagen y el giroscopio no gira) el objetivo se retiene y se suaviza mucho: el ruido de milimetros de cada medida
-// ya no mueve el plato. Al primer movimiento real se suelta y se sigue al instante.
-let motion = 1, still = false, stillSince = 0, lastObsT = 0, gyroRate = 0, moveHits = 0
-const cHold = new THREE.Vector3(), qHold = new THREE.Quaternion(), qGyroHold = new THREE.Quaternion(), qObsPrev = new THREE.Quaternion(), qObs = new THREE.Quaternion()
-const probe = new THREE.PerspectiveCamera(), box = new THREE.Box3(), qT = new THREE.Quaternion()
-const corners = Array.from({length: 8}, () => new THREE.Vector3()), va = new THREE.Vector3(), vb = new THREE.Vector3()
+// --- pose dibujada (LOGICA_ESTABILIDAD_3D_SIN_TEMBLORES.md) ---
+// Una vez por cuadro: la pose medida por el seguidor -> la pose con la que se dibuja ESE cuadro. Con el celular quieto (la mesa
+// no se mueve en la imagen y, si hay giroscopio, no gira) la pose se retiene: el ruido de cada medida ya no mueve el plato. Al
+// primer movimiento claro se suelta y se sigue al instante. La quietud se mide por segundo, no por cuadro, para que valga igual
+// en un celular que sigue 30 cuadros/s que en uno que sigue 10.
+let motion = 1, still = false, stillSince = 0, moveHits = 0, hasPose = false, prevT = 0, lastM = null, sensorSince = 0
+const cHold = new THREE.Vector3(), qHold = new THREE.Quaternion(), cVis = new THREE.Vector3(), qVis = new THREE.Quaternion()
+const probe = new THREE.PerspectiveCamera(), box = new THREE.Box3(), va = new THREE.Vector3(), vb = new THREE.Vector3()
+const corners = Array.from({length: 8}, () => new THREE.Vector3())
 // cuanto cambia el plato en pantalla (px CSS) entre verlo desde la pose a y desde la b, medido en las esquinas de su caja real
 const screenDiff = (ca, qa, cb, qb) => {
   box.setFromObject(plate); let i = 0, d = 0, n = 0
@@ -185,55 +224,70 @@ const screenDiff = (ca, qa, cb, qb) => {
   }
   return n ? d : null
 }
-// una vez por cuadro de video medido: decide si el celular esta quieto
-const observe = (m) => {
-  if (m.t <= lastObsT) return
-  const dt = (m.t - lastObsT) / 1000; lastObsT = m.t
-  gyroAt(m.t, qObs); gyroRate = dt < 0.5 ? qObs.angleTo(qObsPrev) / dt : 1; qObsPrev.copy(qObs)
-  if (m.flow < 0.4 && stepN) sensNoise += (stepSum / stepN - sensNoise) * 0.1
-  stepSum = stepN = 0
-  const drift = still && placed ? screenDiff(cHold, qHold, camTarget, qVis) : 0
-  // >= 1: movimiento. Umbrales: 0.5 px/cuadro de la mesa en la imagen de 320 px, 0.08 rad/s de giro (solo si el sensor es
-  // limpio; uno ruidoso pareceria moverse siempre). Una evidencia debil (< 2) tiene que repetirse en el cuadro siguiente: el
-  // ruido de la camara a veces la cruza una vez. Y al soltar por evidencia debil el plato se desliza a su lugar en vez de
-  // saltar; un movimiento claro (>= 3) se sigue al instante
-  const ev = Math.max(m.flow / 0.5, sensClean() ? gyroRate / 0.08 : 0)
-  moveHits = ev >= 1 ? moveHits + 1 : 0
-  if (m.reloc || ev >= 2 || moveHits >= 2) { motion = Math.max(motion, m.reloc ? 1 : Math.min(1, ev / 3)); still = false; stillSince = 0; return }
-  if (ev >= 1) return // un solo cuadro dudoso: no cuenta ni como quietud ni como movimiento
-  // desplazamiento lento acumulado respecto a lo retenido: se suelta, pero corrigiendo suave (no es prueba de movimiento)
-  if (drift > 4) { still = false; stillSince = 0; motion = Math.max(motion, 0.5); return }
-  motion *= 0.8 // sin evidencia de movimiento: entrar en quietud es gradual; salir, rapido (arriba)
-  if (!stillSince) stillSince = m.t
-  if (!still && m.t - stillSince > 300) { still = true; cHold.copy(camera.position); qHold.copy(camera.quaternion); qGyroHold.copy(qLast) }
+const present = (f, m) => {
+  if (shown) retire.push(shown.full)
+  shown = f; showFrame(f.full)
+  if (!m) return
+  lastM = m; sensorSince ||= performance.now()
+  const dt = prevT ? Math.min(0.5, Math.max(0.001, (f.t - prevT) / 1000)) : 0.033; prevT = f.t
+  if (m.tracking) {
+    cVis.fromArray(m.c); qVis.fromArray(m.qv)
+    // >= 1: movimiento. 8 px/s de la mesa en la imagen de 320 px (la mano "quieta" mueve 1-3) o 0.1 rad/s de giro. Una
+    // evidencia debil (< 2) tiene que repetirse en el cuadro siguiente: el ruido de la camara a veces la cruza una vez. Al soltar
+    // por evidencia debil el plato se acomoda suave; un movimiento claro se sigue al instante
+    const ev = Math.max(m.flow / dt / 8, hasGyro ? rateBetween(f.t - dt * 1000, f.t) / 0.1 : 0)
+    moveHits = ev >= 1 ? moveHits + 1 : 0
+    if (!hasPose || m.reloc || ev >= 2 || moveHits >= 2) { motion = Math.max(motion, !hasPose || m.reloc ? 1 : Math.min(1, ev / 3)); still = false; stillSince = 0 }
+    else if (ev < 1) {
+      // desplazamiento lento acumulado respecto a lo retenido: se suelta, pero corrigiendo suave (no es prueba de movimiento)
+      if (still && placed && screenDiff(cHold, qHold, cVis, qVis) > 3) { still = false; stillSince = 0; motion = Math.max(motion, 0.5) }
+      else {
+        motion *= Math.exp(-dt / 0.15) // entrar en quietud es gradual; salir, inmediato (arriba)
+        if (!stillSince) stillSince = f.t
+        if (!still && f.t - stillSince > 300) { still = true; cHold.copy(camera.position); qHold.copy(camera.quaternion) }
+      }
+    }
+    const a = motion > 0.99 ? 1 : 1 - Math.exp(-dt / ((1 - motion) * 0.25))
+    if (still) { camera.position.copy(cHold); camera.quaternion.copy(qHold) }
+    else { camera.position.lerp(cVis, a); camera.quaternion.slerp(qVis, a) }
+    hasPose = true
+  } else if (m.state !== 'degradado') {
+    // sin la mesa a la vista: la posicion queda, la orientacion sigue al sensor (suavizada si no hay giroscopio: tiembla)
+    still = false; stillSince = 0; motion = 1
+    camera.quaternion.slerp(qVis.fromArray(m.qv), hasGyro ? 1 : 1 - Math.exp(-dt / 0.15))
+  } // degradado (un cuadro dudoso): no cuenta como quietud ni cambia de fuente; se dibuja con la ultima pose buena
+  if (DEBUG) debugInfo(m)
 }
-if (cam.requestVideoFrameCallback) cam.requestVideoFrameCallback(onFrame) // sin esto (navegadores viejos) queda solo el giroscopio
-const drawDebug = (m) => { // ?debug: los puntos seguidos (verde), la posicion del celular y cuanto tarda cada cuadro
-  const c = $('dbg'), x = c.getContext('2d'), tw = Math.round(cam.videoWidth * TW / Math.max(cam.videoWidth, cam.videoHeight)), th = Math.round(cam.videoHeight * TW / Math.max(cam.videoWidth, cam.videoHeight))
-  const s = Math.max(innerWidth / tw, innerHeight / th)
-  c.hidden = false; c.width = innerWidth; c.height = innerHeight; x.fillStyle = '#0f0'
-  for (let i = 0; i < m.xy.length; i += 2) x.fillRect((m.xy[i] - tw / 2) * s + innerWidth / 2 - 2, (m.xy[i + 1] - th / 2) * s + innerHeight / 2 - 2, 4, 4)
-  msg.style.opacity = 1; msg.textContent = `${m.state} ${still ? 'QUIETO' : 'mov ' + motion.toFixed(2)} sensor ${(sensNoise * 57.3).toFixed(2)}° flujo ${m.flow.toFixed(2)} ${m.n} puntos ${m.kf} vistas  x ${m.c[0].toFixed(2)}  y ${m.c[1].toFixed(2)}  z ${m.c[2].toFixed(2)}  ${m.ms.toFixed(0)} ms`
-  // para pruebas automaticas: pose medida, cuadro recien procesado, pose dibujada y el plato
-  window.dbg = {camTarget, qVis, n: m.n, ms: m.ms, strip: m.strip, camera, plate, still, motion}; window.dbgHook?.()
+let nFrames = 0, fpsT = performance.now(), fps = 0
+const debugInfo = (m) => { // ?debug: una linea abajo, sin tapar el plato
+  nFrames++; const now = performance.now(); if (now - fpsT > 1000) { fps = nFrames * 1000 / (now - fpsT); nFrames = 0; fpsT = now }
+  const s = m.st || {}
+  $('dbg').hidden = false
+  $('dbg').textContent = `${fps.toFixed(0)} cuadros/s | seguidor ${m.ms.toFixed(0)} ms (lk ${(s.lk || 0).toFixed(0)} img ${(s.img || 0).toFixed(0)}) captura ${capMs.toFixed(0)} ms | ` +
+    `${m.state} ${still ? 'QUIETO' : 'mov ' + motion.toFixed(2)} | ${m.n}/${m.maxp} puntos ${m.kf} vistas | giroscopio ${hasGyro ? 'si' : 'no'} | ${fw}x${fh}`
+  // para pruebas automaticas: cuadro recien procesado (su numero va en m.strip) y la pose con la que se dibuja
+  window.dbg = {strip: m.strip, camera, plate, still, motion, ms: m.ms, n: m.n, state: m.state, flow: m.flow, c: m.c, dt: m.dt}; window.dbgHook?.()
 }
 
 let plate, placed = false, baseY = 0, dropT = 0
+const shadowDirty = () => { renderer.shadowMap.needsUpdate = true; dirty = true }
 const setScale = (s) => {
   plate.scale.setScalar(Math.min(4, Math.max(0.4, s)))
-  shadow.scale.setScalar(plate.scale.x)
+  shadow.scale.setScalar(plate.scale.x); shadowDirty()
 }
 const setPos = (p) => {
   plate.position.copy(p); shadow.position.set(p.x, 0.001, p.z)
   sun.target.position.copy(p); sun.position.set(p.x, 0.7, p.z - 0.6) // mas alto = sombra mas corta bajo el plato; -z = mas lejos de quien mira
+  shadowDirty()
 }
-const drop = (p) => { setPos(p); baseY = p.y; dropT = performance.now() } // aparece cayendo un poco en p
+const dropAt = (p) => { setPos(p); baseY = p.y; dropT = performance.now() } // aparece cayendo un poco en p
 
 const draco = new DRACOLoader()
 draco.setDecoderPath('https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/libs/draco/gltf/')
 const loader = new GLTFLoader(); loader.setDRACOLoader(draco)
+let plateReady = false
 loader.load('fritada.glb', (g) => {
-  plate = g.scene; plate.visible = false; scene.add(plate)
+  plate = g.scene; scene.add(plate)
   // nitidez de las texturas al mirar el plato en angulo
   plate.traverse((o) => { const m = o.material; if (m) for (const k of ['map', 'normalMap']) if (m[k]) m[k].anisotropy = renderer.capabilities.getMaxAnisotropy() })
   plate.traverse((o) => {
@@ -245,6 +299,10 @@ loader.load('fritada.glb', (g) => {
     o.material = new THREE.MeshLambertMaterial({map: m.map, normalMap: m.normalMap, color: q.get('tint') ? '#' + q.get('tint') : 0xffecd8})
     m.dispose()
   })
+  // los programas de la GPU se preparan antes de mostrar el plato: compilarlos al aparecer trababa ese primer cuadro
+  shadow.visible = true
+  renderer.compileAsync(scene, camera).catch(() => {}).finally(() => { plateReady = true })
+  plate.visible = shadow.visible = false
 }, undefined, (e) => { msg.textContent = 'No cargo el plato: ' + e.message })
 
 const ray = new THREE.Raycaster(); ray.far = 3 // m: mas lejos el plano supuesto ya no es la mesa
@@ -257,15 +315,15 @@ const dist = (e) => Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.to
 const angle = (e) => Math.atan2(e.touches[1].clientY - e.touches[0].clientY, e.touches[1].clientX - e.touches[0].clientX)
 let d0, s0, a0, r0, tap = null, grab = null
 addEventListener('touchstart', (e) => {
-  if (!plate || e.target.closest('.ui')) return
+  if (!placed || e.target.closest('.ui')) return
   if (e.touches.length === 2) { tap = grab = null; d0 = dist(e); s0 = plate.scale.x; a0 = angle(e); r0 = plate.rotation.y; return }
   const t = e.touches[0], h = hitGround(t.clientX, t.clientY)
   tap = {x: t.clientX, y: t.clientY, t: performance.now()}
   // tocando el plato se lo arrastra con el dedo (se guarda la distancia del dedo a su centro para que no salte)
-  grab = placed && h && h.point.distanceTo(plate.position) < 0.16 * plate.scale.x ? plate.position.clone().sub(h.point) : null
+  grab = h && h.point.distanceTo(plate.position) < 0.16 * plate.scale.x ? plate.position.clone().sub(h.point) : null
 })
 addEventListener('touchmove', (e) => {
-  if (!plate) return
+  if (!placed) return
   if (e.touches.length === 2) { setScale(s0 * dist(e) / d0); plate.rotation.y = r0 - (angle(e) - a0); return } // pellizco: tamano; giro de dedos: rota
   const t = e.touches[0], h = grab && hitGround(t.clientX, t.clientY)
   if (tap && Math.hypot(t.clientX - tap.x, t.clientY - tap.y) > 12) tap = null
@@ -273,44 +331,36 @@ addEventListener('touchmove', (e) => {
 })
 addEventListener('touchend', (e) => {
   // toque corto en la mesa: el plato salta ahi. Al soltar y no al apoyar, para que el primer dedo de un pellizco no lo mueva
-  if (tap && !grab && !e.touches.length && performance.now() - tap.t < 400) { const h = hitGround(tap.x, tap.y); if (h) { drop(h.point); ripple(tap.x, tap.y) } }
+  if (tap && !grab && !e.touches.length && performance.now() - tap.t < 400) { const h = hitGround(tap.x, tap.y); if (h) { dropAt(h.point); ripple(tap.x, tap.y) } }
   tap = null
 })
 // pantalla completa al primer toque: sin la barra de Chrome, como la camara de Snapchat
 addEventListener('touchend', () => document.documentElement.requestFullscreen?.().catch(() => {}), {once: true})
-$('rot').onclick = () => plate && (plate.rotation.y += Math.PI / 4)
+$('rot').onclick = () => { if (placed) { plate.rotation.y += Math.PI / 4; shadowDirty() } }
 
+// dibujo: solo cuando hay algo nuevo (un cuadro de la camara con su pose, un gesto o la caida del plato); repintar lo mismo
+// 60 veces por segundo le quitaba tiempo al seguidor
 const clock = new THREE.Clock()
 renderer.setAnimationLoop(() => {
   const dt = Math.min(0.1, clock.getDelta())
-  // objetivo: quieto -> la pose retenida; con la mesa a la vista -> el giroscopio en el cuadro que se ve + la correccion medida
-  // (el plato queda pegado al video); sin ella (>300 ms) -> el giroscopio con la ultima correccion, sin saltar de fuente
-  const fresh = performance.now() - trackT < 300
-  // sin medidas recientes la pose retenida caduca, pero eso no prueba movimiento: el giroscopio decide (abajo y predictGyro)
-  if (!fresh) still = false
-  // giro: con giroscopio se nota antes que en la imagen, aunque el seguidor este ocupado. Rapido (> 0.08 rad/s) o acumulado (> 1 grado)
-  const clean = sensClean(), gr = tLast > tPrev ? qLast.angleTo(qPrev) * 1000 / (tLast - tPrev) : 0
-  if (clean && gr > 0.08) { still = false; stillSince = 0; motion = Math.max(motion, Math.min(1, gr / 0.24)) }
-  if (clean && still && qLast.angleTo(qGyroHold) > 0.017) { still = false; stillSince = 0; motion = 1 }
-  const tc = still ? cHold : fresh ? camTarget : camera.position
-  // sensor limpio: el del cuadro que se ve + la correccion medida (responde al instante); ruidoso: la orientacion de la imagen
-  const tq = still ? qHold : fresh && !clean ? qVis : qT.multiplyQuaternions(qCorr, fresh ? gyroAt(shownT, qShown) : predictGyro(qShown))
-  // constante de tiempo segun cuanto movimiento hay: 0.35 s quieto, inmediato moviendose. Solo el dibujo, el seguidor no lo ve
-  const a = motion > 0.99 ? 1 : 1 - Math.exp(-dt / ((1 - motion) * 0.35 + motion * 0.01))
-  camera.position.lerp(tc, a); camera.quaternion.slerp(tq, a)
   if (placed) {
-    plate.rotation.y += SPIN * dt
+    if (SPIN) { plate.rotation.y += SPIN * dt; shadowDirty() }
     // caida suave al aparecer (~400 ms): baja desde 12 cm con un rebote leve, para que se sienta vivo
     const e = (performance.now() - dropT) / 400
-    if (e < 1) { const k = 1 - Math.pow(1 - e, 3); plate.position.y = baseY + 0.12 * (1 - k); shadow.material.opacity = k }
-    else if (shadow.material.opacity < 1) { plate.position.y = baseY; shadow.material.opacity = 1 }
+    if (e < 1) { const k = 1 - Math.pow(1 - e, 3); plate.position.y = baseY + 0.12 * (1 - k); shadow.material.opacity = k; shadowDirty() }
+    else if (shadow.material.opacity < 1) { plate.position.y = baseY; shadow.material.opacity = 1; shadowDirty() }
   }
-  // primera vez: el plato aparece donde apunta el centro de la pantalla, cuando ya hay giroscopio
-  if (!placed && plate && gotGyro) {
+  // primera vez: el plato aparece donde apunta el centro de la pantalla en cuanto hay una pose medida; en una mesa sin textura
+  // que seguir, al segundo y medio con la orientacion del sensor (como antes de seguir puntos)
+  if (!placed && plateReady && (hasPose || (sensorSince && performance.now() - sensorSince > 1500))) {
     const h = hitGround(innerWidth / 2, innerHeight / 2)
-    if (h) { drop(h.point); setScale(1); plate.visible = shadow.visible = placed = true; setTimeout(() => (msg.style.opacity = 0), 6000) }
+    if (h) { dropAt(h.point); setScale(1); plate.visible = shadow.visible = placed = true; setTimeout(() => (msg.style.opacity = 0), 6000) }
   }
+  if (!dirty) return
+  dirty = false
   renderer.render(scene, camera)
+  for (const b of retire) b.close()
+  retire.length = 0
 })
 </script>
 </body>
