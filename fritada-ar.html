@@ -114,12 +114,12 @@ addEventListener('deviceorientation', (e) => {
   hist.push([tLast, qLast.clone()]); if (hist.length > 20) hist.shift()
 })
 // sigue girando a la misma velocidad que entre las dos ultimas lecturas (como mucho 1.5 intervalos, para no pasarse si el celular se detiene)
-const predictCamera = () => {
+const predictGyro = (out) => {
   const gap = tLast - tPrev
-  if (!tPrev || gap <= 0 || gap > 150) return camera.quaternion.copy(qLast)
+  if (!tPrev || gap <= 0 || gap > 150) return out.copy(qLast)
   const f = Math.min(1.5, (performance.now() - tLast) / gap)
   qStep.copy(qLast).multiply(tmp.copy(qPrev).invert()) // giro de la lectura anterior a la ultima
-  camera.quaternion.copy(qId).slerp(qStep, f).multiply(qLast)
+  return out.copy(qId).slerp(qStep, f).multiply(qLast)
 }
 const gyroAt = (t, out) => { // orientacion a la hora t, interpolada entre las dos lecturas que la rodean
   let i = hist.length - 1
@@ -139,9 +139,8 @@ setTimeout(() => { if (!gotGyro) msg.textContent = 'Este celular no entrega dato
 const TW = 320 // px del lado largo del video al seguir puntos: alcanza para la veta de la mesa y es rapido en celulares modestos
 const cam = $('cam'), DEBUG = q.has('debug'), tracker = new Worker('fritada-track.js')
 tracker.postMessage({h: CAM_H, fov: LONG_FOV})
-let busy = false, tracking = false, trackT = 0, shownT = 0 // shownT: hora en que se tomo el cuadro que se esta viendo
+let busy = false, trackT = -1e9, shownT = 0 // shownT: hora en que se tomo el cuadro que se esta viendo
 const camTarget = camera.position.clone(), qCorr = new THREE.Quaternion(), qVis = new THREE.Quaternion(), qSend = new THREE.Quaternion(), qShown = new THREE.Quaternion()
-const qCorrShown = new THREE.Quaternion()
 const onFrame = (now, meta) => {
   cam.requestVideoFrameCallback(onFrame)
   const t = shownT = meta.captureTime || now
@@ -153,9 +152,51 @@ const onFrame = (now, meta) => {
     .catch(() => (busy = false))
 }
 tracker.onmessage = ({data: m}) => {
-  busy = false; tracking = m.tracking
-  if (tracking) { camTarget.fromArray(m.c); qCorr.fromArray(m.qc); qVis.fromArray(m.qv); trackT = performance.now() }
+  busy = false
+  if (m.tracking) { camTarget.fromArray(m.c); qCorr.fromArray(m.qc); qVis.fromArray(m.qv); trackT = performance.now(); observe(m) }
+  else stillSince = 0 // un cuadro dudoso no cuenta como quietud, pero tampoco cambia de fuente (sigue la ultima pose buena)
   if (DEBUG) drawDebug(m)
+}
+
+// --- quietud y presentacion (LOGICA_ESTABILIDAD_3D_SIN_TEMBLORES.md) ---
+// Tres poses separadas: la medida (camTarget/qVis), la objetivo y la dibujada (camera). Con el celular quieto (la mesa no se
+// mueve en la imagen y el giroscopio no gira) el objetivo se retiene y se suaviza mucho: el ruido de milimetros de cada medida
+// ya no mueve el plato. Al primer movimiento real se suelta y se sigue al instante.
+let motion = 1, still = false, stillSince = 0, lastObsT = 0, gyroRate = 0, moveHits = 0
+const cHold = new THREE.Vector3(), qHold = new THREE.Quaternion(), qGyroHold = new THREE.Quaternion(), qObsPrev = new THREE.Quaternion(), qObs = new THREE.Quaternion()
+const probe = new THREE.PerspectiveCamera(), box = new THREE.Box3(), qT = new THREE.Quaternion()
+const corners = Array.from({length: 8}, () => new THREE.Vector3()), va = new THREE.Vector3(), vb = new THREE.Vector3()
+// cuanto cambia el plato en pantalla (px CSS) entre verlo desde la pose a y desde la b, medido en las esquinas de su caja real
+const screenDiff = (ca, qa, cb, qb) => {
+  box.setFromObject(plate); let i = 0, d = 0, n = 0
+  for (const x of [box.min.x, box.max.x]) for (const y of [box.min.y, box.max.y]) for (const z of [box.min.z, box.max.z]) corners[i++].set(x, y, z)
+  probe.copy(camera)
+  for (const p of corners) {
+    probe.position.copy(ca); probe.quaternion.copy(qa); probe.updateMatrixWorld(); va.copy(p).project(probe)
+    probe.position.copy(cb); probe.quaternion.copy(qb); probe.updateMatrixWorld(); vb.copy(p).project(probe)
+    if (Math.abs(va.z) > 1 || Math.abs(vb.z) > 1) continue // detras de la camara o fuera del recorte: no sirve para medir
+    d = Math.max(d, Math.hypot((va.x - vb.x) * innerWidth, (va.y - vb.y) * innerHeight) / 2); n++
+  }
+  return n ? d : null
+}
+// una vez por cuadro de video medido: decide si el celular esta quieto
+const observe = (m) => {
+  if (m.t <= lastObsT) return
+  const dt = (m.t - lastObsT) / 1000; lastObsT = m.t
+  gyroAt(m.t, qObs); gyroRate = dt < 0.5 ? qObs.angleTo(qObsPrev) / dt : 1; qObsPrev.copy(qObs)
+  const drift = still && placed ? screenDiff(cHold, qHold, camTarget, qVis) : 0
+  // >= 1: movimiento. Umbrales: 0.5 px/cuadro de la mesa en la imagen de 320 px, 0.08 rad/s de giro. Una evidencia debil
+  // (< 2) tiene que repetirse en el cuadro siguiente: el ruido de la camara a veces la cruza una vez. Y al soltar por evidencia
+  // debil el plato se desliza a su lugar en vez de saltar; un movimiento claro (>= 3) se sigue al instante
+  const ev = Math.max(m.flow / 0.5, gyroRate / 0.08)
+  moveHits = ev >= 1 ? moveHits + 1 : 0
+  if (m.reloc || ev >= 2 || moveHits >= 2) { motion = Math.max(motion, m.reloc ? 1 : Math.min(1, ev / 3)); still = false; stillSince = 0; return }
+  if (ev >= 1) return // un solo cuadro dudoso: no cuenta ni como quietud ni como movimiento
+  // desplazamiento lento acumulado respecto a lo retenido: se suelta, pero corrigiendo suave (no es prueba de movimiento)
+  if (drift > 4) { still = false; stillSince = 0; motion = Math.max(motion, 0.5); return }
+  motion *= 0.8 // sin evidencia de movimiento: entrar en quietud es gradual; salir, rapido (arriba)
+  if (!stillSince) stillSince = m.t
+  if (!still && m.t - stillSince > 300) { still = true; cHold.copy(camera.position); qHold.copy(camera.quaternion); qGyroHold.copy(qLast) }
 }
 if (cam.requestVideoFrameCallback) cam.requestVideoFrameCallback(onFrame) // sin esto (navegadores viejos) queda solo el giroscopio
 const drawDebug = (m) => { // ?debug: los puntos seguidos (verde), la posicion del celular y cuanto tarda cada cuadro
@@ -163,8 +204,9 @@ const drawDebug = (m) => { // ?debug: los puntos seguidos (verde), la posicion d
   const s = Math.max(innerWidth / tw, innerHeight / th)
   c.hidden = false; c.width = innerWidth; c.height = innerHeight; x.fillStyle = '#0f0'
   for (let i = 0; i < m.xy.length; i += 2) x.fillRect((m.xy[i] - tw / 2) * s + innerWidth / 2 - 2, (m.xy[i + 1] - th / 2) * s + innerHeight / 2 - 2, 4, 4)
-  msg.style.opacity = 1; msg.textContent = `${m.state} ${m.n} puntos ${m.kf} vistas  x ${m.c[0].toFixed(2)}  y ${m.c[1].toFixed(2)}  z ${m.c[2].toFixed(2)}  ${m.ms.toFixed(0)} ms`
-  window.dbg = {camTarget, qVis, n: m.n, ms: m.ms, strip: m.strip}; window.dbgHook?.() // para pruebas automaticas: pose y cuadro recien procesados
+  msg.style.opacity = 1; msg.textContent = `${m.state} ${still ? 'QUIETO' : 'mov ' + motion.toFixed(2)} flujo ${m.flow.toFixed(2)} ${m.n} puntos ${m.kf} vistas  x ${m.c[0].toFixed(2)}  y ${m.c[1].toFixed(2)}  z ${m.c[2].toFixed(2)}  ${m.ms.toFixed(0)} ms`
+  // para pruebas automaticas: pose medida, cuadro recien procesado, pose dibujada y el plato
+  window.dbg = {camTarget, qVis, n: m.n, ms: m.ms, strip: m.strip, camera, plate, still, motion}; window.dbgHook?.()
 }
 
 let plate, placed = false, baseY = 0, dropT = 0
@@ -232,14 +274,20 @@ $('rot').onclick = () => plate && (plate.rotation.y += Math.PI / 4)
 const clock = new THREE.Clock()
 renderer.setAnimationLoop(() => {
   const dt = Math.min(0.1, clock.getDelta())
-  // con la mesa a la vista: el giroscopio en el cuadro que se ve + la correccion medida (el plato queda pegado al video); sin ella, solo el giroscopio
-  // la pose mostrada se separa de la medida: temblores de milimetros se suavizan, un movimiento real (o una correccion grande
-  // al reencontrar la mesa) se sigue al instante. Solo afecta al dibujo, el seguidor no lo ve
-  if (tracking && performance.now() - trackT < 300) {
-    qCorrShown.slerp(qCorr, Math.min(1, Math.max(0.25, qCorrShown.angleTo(qCorr) / 0.02)))
-    camera.quaternion.multiplyQuaternions(qCorrShown, gyroAt(shownT, qShown))
-    camera.position.lerp(camTarget, Math.min(1, Math.max(0.25, camera.position.distanceTo(camTarget) / 0.02)))
-  } else predictCamera()
+  // objetivo: quieto -> la pose retenida; con la mesa a la vista -> el giroscopio en el cuadro que se ve + la correccion medida
+  // (el plato queda pegado al video); sin ella (>300 ms) -> el giroscopio con la ultima correccion, sin saltar de fuente
+  const fresh = performance.now() - trackT < 300
+  // sin medidas recientes la pose retenida caduca, pero eso no prueba movimiento: el giroscopio decide (abajo y predictGyro)
+  if (!fresh) still = false
+  // giro: se nota antes que en la imagen, aunque el seguidor este ocupado. Rapido (> 0.08 rad/s) o acumulado (> 1 grado)
+  const gr = tLast > tPrev ? qLast.angleTo(qPrev) * 1000 / (tLast - tPrev) : 0
+  if (gr > 0.08) { still = false; stillSince = 0; motion = Math.max(motion, Math.min(1, gr / 0.24)) }
+  if (still && qLast.angleTo(qGyroHold) > 0.017) { still = false; stillSince = 0; motion = 1 }
+  const tc = still ? cHold : fresh ? camTarget : camera.position
+  const tq = still ? qHold : qT.multiplyQuaternions(qCorr, fresh ? gyroAt(shownT, qShown) : predictGyro(qShown))
+  // constante de tiempo segun cuanto movimiento hay: 0.35 s quieto, inmediato moviendose. Solo el dibujo, el seguidor no lo ve
+  const a = motion > 0.99 ? 1 : 1 - Math.exp(-dt / ((1 - motion) * 0.35 + motion * 0.01))
+  camera.position.lerp(tc, a); camera.quaternion.slerp(tq, a)
   if (placed) {
     plate.rotation.y += SPIN * dt
     // caida suave al aparecer (~400 ms): baja desde 12 cm con un rebote leve, para que se sienta vivo

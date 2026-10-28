@@ -171,14 +171,16 @@ onmessage = ({data: m}) => {
   // desde la ultima pose buena que arrastrar puntos mal seguidos, que dejarian el plato corrido para siempre
   if (t - lastT > 250) lose()
   lastT = t
-  let qc = [0, 0, 0, 1], valid = false, reloc = false
+  let qc = [0, 0, 0, 1], valid = false, reloc = false, flow = 0
   if (pts.length) {
-    const before = pts.length
+    const before = pts.length, fl = []
     pts.forEach((p, i) => { pxy[2 * i] = p.x; pxy[2 * i + 1] = p.y })
     jsfeat.optical_flow_lk.track(prevPyr, currPyr, pxy, cxy, pts.length, 15, 20, ok, 0.01, 0.001)
     // y de vuelta: un punto bien seguido regresa a donde estaba; si no (borroso, reflejo, algo que se movio) se descarta
     jsfeat.optical_flow_lk.track(currPyr, prevPyr, cxy, bxy, pts.length, 15, 20, ok2, 0.01, 0.001)
-    pts = pts.filter((p, i) => ok[i] && ok2[i] && Math.hypot(bxy[2 * i] - p.x, bxy[2 * i + 1] - p.y) < 1 && (p.b = camRay(p.x = cxy[2 * i], p.y = cxy[2 * i + 1])))
+    pts = pts.filter((p, i) => ok[i] && ok2[i] && Math.hypot(bxy[2 * i] - p.x, bxy[2 * i + 1] - p.y) < 1 &&
+      fl.push(Math.hypot(cxy[2 * i] - p.x, cxy[2 * i + 1] - p.y)) && (p.b = camRay(p.x = cxy[2 * i], p.y = cxy[2 * i + 1])))
+    flow = fl.length ? median(fl) : 0 // px que se movio la mesa en la imagen: la prueba de que el celular se movio
     if (pts.length < before / 2 || pts.length < 8) lose()
     else {
       qc = solvePose(qF)
@@ -211,7 +213,7 @@ onmessage = ({data: m}) => {
   }
   ;[prevPyr, currPyr] = [currPyr, prevPyr]
   const state = valid ? 'seguimiento' : bad ? 'degradado' : relocFor > 0 ? 'relocalizando' : 'perdido'
-  postMessage({tracking: valid, reloc, state, c, qc, qv, n: pts.length, kf: kfs.length, ms: performance.now() - t1,
+  postMessage({tracking: valid, reloc, state, t, flow, c, qc, qv, n: pts.length, kf: kfs.length, ms: performance.now() - t1,
     // ?debug: los puntos para dibujarlos, y el inicio de la fila 3 del cuadro (las pruebas automaticas leen ahi el numero de cuadro)
     ...(m.debug && {xy: pts.flatMap((p) => [p.x, p.y]), strip: Array.from(prevPyr.data[0].data.subarray(3 * w, 3 * w + 60))})})
 }
