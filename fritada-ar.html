@@ -141,6 +141,7 @@ const cam = $('cam'), DEBUG = q.has('debug'), tracker = new Worker('fritada-trac
 tracker.postMessage({h: CAM_H, fov: LONG_FOV})
 let busy = false, tracking = false, trackT = 0, shownT = 0 // shownT: hora en que se tomo el cuadro que se esta viendo
 const camTarget = camera.position.clone(), qCorr = new THREE.Quaternion(), qVis = new THREE.Quaternion(), qSend = new THREE.Quaternion(), qShown = new THREE.Quaternion()
+const qCorrShown = new THREE.Quaternion()
 const onFrame = (now, meta) => {
   cam.requestVideoFrameCallback(onFrame)
   const t = shownT = meta.captureTime || now
@@ -162,7 +163,7 @@ const drawDebug = (m) => { // ?debug: los puntos seguidos (verde), la posicion d
   const s = Math.max(innerWidth / tw, innerHeight / th)
   c.hidden = false; c.width = innerWidth; c.height = innerHeight; x.fillStyle = '#0f0'
   for (let i = 0; i < m.xy.length; i += 2) x.fillRect((m.xy[i] - tw / 2) * s + innerWidth / 2 - 2, (m.xy[i + 1] - th / 2) * s + innerHeight / 2 - 2, 4, 4)
-  msg.style.opacity = 1; msg.textContent = `${m.n} puntos  x ${m.c[0].toFixed(2)}  y ${m.c[1].toFixed(2)}  z ${m.c[2].toFixed(2)}  ${m.ms.toFixed(0)} ms`
+  msg.style.opacity = 1; msg.textContent = `${m.state} ${m.n} puntos ${m.kf} vistas  x ${m.c[0].toFixed(2)}  y ${m.c[1].toFixed(2)}  z ${m.c[2].toFixed(2)}  ${m.ms.toFixed(0)} ms`
   window.dbg = {camTarget, qVis, n: m.n, ms: m.ms, strip: m.strip}; window.dbgHook?.() // para pruebas automaticas: pose y cuadro recien procesados
 }
 
@@ -195,7 +196,7 @@ loader.load('fritada.glb', (g) => {
   })
 }, undefined, (e) => { msg.textContent = 'No cargo el plato: ' + e.message })
 
-const ray = new THREE.Raycaster()
+const ray = new THREE.Raycaster(); ray.far = 3 // m: mas lejos el plano supuesto ya no es la mesa
 const hitGround = (cx, cy) => {
   ray.setFromCamera(new THREE.Vector2((cx / innerWidth) * 2 - 1, -(cy / innerHeight) * 2 + 1), camera)
   return ray.intersectObject(ground)[0]
@@ -232,7 +233,13 @@ const clock = new THREE.Clock()
 renderer.setAnimationLoop(() => {
   const dt = Math.min(0.1, clock.getDelta())
   // con la mesa a la vista: el giroscopio en el cuadro que se ve + la correccion medida (el plato queda pegado al video); sin ella, solo el giroscopio
-  if (tracking && performance.now() - trackT < 300) { camera.quaternion.multiplyQuaternions(qCorr, gyroAt(shownT, qShown)); camera.position.copy(camTarget) } else predictCamera()
+  // la pose mostrada se separa de la medida: temblores de milimetros se suavizan, un movimiento real (o una correccion grande
+  // al reencontrar la mesa) se sigue al instante. Solo afecta al dibujo, el seguidor no lo ve
+  if (tracking && performance.now() - trackT < 300) {
+    qCorrShown.slerp(qCorr, Math.min(1, Math.max(0.25, qCorrShown.angleTo(qCorr) / 0.02)))
+    camera.quaternion.multiplyQuaternions(qCorrShown, gyroAt(shownT, qShown))
+    camera.position.lerp(camTarget, Math.min(1, Math.max(0.25, camera.position.distanceTo(camTarget) / 0.02)))
+  } else predictCamera()
   if (placed) {
     plate.rotation.y += SPIN * dt
     // caida suave al aparecer (~400 ms): baja desde 12 cm con un rebote leve, para que se sienta vivo
