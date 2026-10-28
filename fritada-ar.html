@@ -99,7 +99,12 @@ const zee = new THREE.Vector3(0, 0, 1), q1 = new THREE.Quaternion(-Math.sqrt(0.5
 let gotGyro = false, yaw0 = null
 // el giroscopio llega a ~25 lecturas/s en celulares como el Honor; se guardan las dos ultimas para predecir el giro en cada cuadro
 const qPrev = new THREE.Quaternion(), qLast = new THREE.Quaternion(), qStep = new THREE.Quaternion(), qId = new THREE.Quaternion()
-let tPrev = 0, tLast = 0
+let tPrev = 0, tLast = 0, stepSum = 0, stepN = 0
+// Celulares sin giroscopio (el Honor: solo acelerometro + brujula) entregan una orientacion que tiembla ~0.5 grados por lectura,
+// y medio grado son ~10 px del plato en pantalla. Se mide ese ruido cuando la imagen muestra la mesa quieta; si es alto, la
+// orientacion del plato sale de la imagen (precisa) y el sensor solo se usa cuando no se ve la mesa. Empieza como ruidoso
+let sensNoise = 0.01 // rad por lectura
+const sensClean = () => sensNoise < 0.003
 const hist = [] // [hora, orientacion] de las ultimas lecturas: hacia donde miraba el celular cuando se tomo cada cuadro del video
 addEventListener('deviceorientation', (e) => {
   if (e.alpha == null) return
@@ -111,6 +116,7 @@ addEventListener('deviceorientation', (e) => {
   qPrev.copy(qLast); tPrev = tLast
   qLast.setFromEuler(eul).multiply(q1).multiply(tmp.setFromAxisAngle(zee, -orient))
   tLast = e.timeStamp || performance.now() // hora en que llego el dato, aunque el codigo corra mas tarde por estar siguiendo puntos
+  stepSum += qLast.angleTo(qPrev); stepN++ // cuanto cambia de una lectura a la otra: con el celular quieto, es su ruido
   hist.push([tLast, qLast.clone()]); if (hist.length > 20) hist.shift()
 })
 // sigue girando a la misma velocidad que entre las dos ultimas lecturas (como mucho 1.5 intervalos, para no pasarse si el celular se detiene)
@@ -184,11 +190,14 @@ const observe = (m) => {
   if (m.t <= lastObsT) return
   const dt = (m.t - lastObsT) / 1000; lastObsT = m.t
   gyroAt(m.t, qObs); gyroRate = dt < 0.5 ? qObs.angleTo(qObsPrev) / dt : 1; qObsPrev.copy(qObs)
+  if (m.flow < 0.4 && stepN) sensNoise += (stepSum / stepN - sensNoise) * 0.1
+  stepSum = stepN = 0
   const drift = still && placed ? screenDiff(cHold, qHold, camTarget, qVis) : 0
-  // >= 1: movimiento. Umbrales: 0.5 px/cuadro de la mesa en la imagen de 320 px, 0.08 rad/s de giro. Una evidencia debil
-  // (< 2) tiene que repetirse en el cuadro siguiente: el ruido de la camara a veces la cruza una vez. Y al soltar por evidencia
-  // debil el plato se desliza a su lugar en vez de saltar; un movimiento claro (>= 3) se sigue al instante
-  const ev = Math.max(m.flow / 0.5, gyroRate / 0.08)
+  // >= 1: movimiento. Umbrales: 0.5 px/cuadro de la mesa en la imagen de 320 px, 0.08 rad/s de giro (solo si el sensor es
+  // limpio; uno ruidoso pareceria moverse siempre). Una evidencia debil (< 2) tiene que repetirse en el cuadro siguiente: el
+  // ruido de la camara a veces la cruza una vez. Y al soltar por evidencia debil el plato se desliza a su lugar en vez de
+  // saltar; un movimiento claro (>= 3) se sigue al instante
+  const ev = Math.max(m.flow / 0.5, sensClean() ? gyroRate / 0.08 : 0)
   moveHits = ev >= 1 ? moveHits + 1 : 0
   if (m.reloc || ev >= 2 || moveHits >= 2) { motion = Math.max(motion, m.reloc ? 1 : Math.min(1, ev / 3)); still = false; stillSince = 0; return }
   if (ev >= 1) return // un solo cuadro dudoso: no cuenta ni como quietud ni como movimiento
@@ -204,7 +213,7 @@ const drawDebug = (m) => { // ?debug: los puntos seguidos (verde), la posicion d
   const s = Math.max(innerWidth / tw, innerHeight / th)
   c.hidden = false; c.width = innerWidth; c.height = innerHeight; x.fillStyle = '#0f0'
   for (let i = 0; i < m.xy.length; i += 2) x.fillRect((m.xy[i] - tw / 2) * s + innerWidth / 2 - 2, (m.xy[i + 1] - th / 2) * s + innerHeight / 2 - 2, 4, 4)
-  msg.style.opacity = 1; msg.textContent = `${m.state} ${still ? 'QUIETO' : 'mov ' + motion.toFixed(2)} flujo ${m.flow.toFixed(2)} ${m.n} puntos ${m.kf} vistas  x ${m.c[0].toFixed(2)}  y ${m.c[1].toFixed(2)}  z ${m.c[2].toFixed(2)}  ${m.ms.toFixed(0)} ms`
+  msg.style.opacity = 1; msg.textContent = `${m.state} ${still ? 'QUIETO' : 'mov ' + motion.toFixed(2)} sensor ${(sensNoise * 57.3).toFixed(2)}° flujo ${m.flow.toFixed(2)} ${m.n} puntos ${m.kf} vistas  x ${m.c[0].toFixed(2)}  y ${m.c[1].toFixed(2)}  z ${m.c[2].toFixed(2)}  ${m.ms.toFixed(0)} ms`
   // para pruebas automaticas: pose medida, cuadro recien procesado, pose dibujada y el plato
   window.dbg = {camTarget, qVis, n: m.n, ms: m.ms, strip: m.strip, camera, plate, still, motion}; window.dbgHook?.()
 }
@@ -279,12 +288,13 @@ renderer.setAnimationLoop(() => {
   const fresh = performance.now() - trackT < 300
   // sin medidas recientes la pose retenida caduca, pero eso no prueba movimiento: el giroscopio decide (abajo y predictGyro)
   if (!fresh) still = false
-  // giro: se nota antes que en la imagen, aunque el seguidor este ocupado. Rapido (> 0.08 rad/s) o acumulado (> 1 grado)
-  const gr = tLast > tPrev ? qLast.angleTo(qPrev) * 1000 / (tLast - tPrev) : 0
-  if (gr > 0.08) { still = false; stillSince = 0; motion = Math.max(motion, Math.min(1, gr / 0.24)) }
-  if (still && qLast.angleTo(qGyroHold) > 0.017) { still = false; stillSince = 0; motion = 1 }
+  // giro: con giroscopio se nota antes que en la imagen, aunque el seguidor este ocupado. Rapido (> 0.08 rad/s) o acumulado (> 1 grado)
+  const clean = sensClean(), gr = tLast > tPrev ? qLast.angleTo(qPrev) * 1000 / (tLast - tPrev) : 0
+  if (clean && gr > 0.08) { still = false; stillSince = 0; motion = Math.max(motion, Math.min(1, gr / 0.24)) }
+  if (clean && still && qLast.angleTo(qGyroHold) > 0.017) { still = false; stillSince = 0; motion = 1 }
   const tc = still ? cHold : fresh ? camTarget : camera.position
-  const tq = still ? qHold : qT.multiplyQuaternions(qCorr, fresh ? gyroAt(shownT, qShown) : predictGyro(qShown))
+  // sensor limpio: el del cuadro que se ve + la correccion medida (responde al instante); ruidoso: la orientacion de la imagen
+  const tq = still ? qHold : fresh && !clean ? qVis : qT.multiplyQuaternions(qCorr, fresh ? gyroAt(shownT, qShown) : predictGyro(qShown))
   // constante de tiempo segun cuanto movimiento hay: 0.35 s quieto, inmediato moviendose. Solo el dibujo, el seguidor no lo ve
   const a = motion > 0.99 ? 1 : 1 - Math.exp(-dt / ((1 - motion) * 0.35 + motion * 0.01))
   camera.position.lerp(tc, a); camera.quaternion.slerp(tq, a)

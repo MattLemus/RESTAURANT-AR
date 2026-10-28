@@ -11,6 +11,9 @@ const MAXP = 80, CELL = 16 // como mucho 80 puntos, uno por cuadricula de 16 px 
 let fov = 67, tw = 0, th = 0, focal = 1, ctx, prevPyr, currPyr, corners, blur, pts = [], lastT = 0, thr = 10, frameNo = 0
 const c = [0, 0.45, 0] // posicion del celular (m); la mesa es el plano y = 0
 let cOk = c.slice(), tOk = 0, bad = 0, kfs = [], relocFor = 0 // ultima pose validada, cuadros malos seguidos, vistas guardadas
+// error del sensor de orientacion medido por la imagen. En celulares sin giroscopio (el Honor: solo acelerometro + brujula) la
+// brujula se desvia varios grados (mas cerca de metal) y casi no cambia de un cuadro al otro: se arrastra en vez de volver a cero
+let qb = [0, 0, 0, 1]
 const pxy = new Float32Array(MAXP * 2), cxy = new Float32Array(MAXP * 2), bxy = new Float32Array(MAXP * 2), ok = new Uint8Array(MAXP), ok2 = new Uint8Array(MAXP), A = new Float64Array(42)
 
 // cuaterniones [x, y, z, w] y vectores [x, y, z], con las mismas formulas que three.js
@@ -72,7 +75,7 @@ const plausible = (qc, t) => {
   const jump = Math.hypot(c[0] - cOk[0], c[1] - cOk[1], c[2] - cOk[2])
   return median(pts.map((p) => p.e)) < 2 && (x1 - x0) * (y1 - y0) > 0.06 * tw * th && // px; area de la imagen que cubren
     jump < 0.04 + 1.5 * (t - tOk) / 1000 && c[1] > 0.08 && c[1] < 2 && // m, m/s: una mano no teletransporta el celular
-    2 * Math.acos(Math.min(1, Math.abs(qc[3]))) < 0.15 // rad: el giroscopio no se equivoca tanto
+    2 * Math.acos(Math.min(1, Math.abs(qc[3]))) < 0.25 // rad: el error del sensor no cambia tanto de un cuadro al otro
 }
 const lose = () => { pts = []; bad = 0; c.splice(0, 3, ...cOk) }
 
@@ -154,7 +157,8 @@ const relocalize = (qF, t) => {
 
 onmessage = ({data: m}) => {
   if (m.h) { c[1] = m.h; cOk = c.slice(); fov = m.fov; return } // configuracion inicial
-  const t1 = performance.now(), {bmp, q: qF, t} = m, w = bmp.width, h = bmp.height
+  const t1 = performance.now(), {bmp, t} = m, w = bmp.width, h = bmp.height
+  const qF = qmul(qb, m.q) // orientacion del sensor con su error ya conocido descontado
   if (w !== tw || h !== th) { // primer cuadro o el celular cambio de orientacion: se empieza de cero
     tw = w; th = h; pts = []; kfs = []
     focal = (Math.max(w, h) / 2) / Math.tan(fov * Math.PI / 360)
@@ -191,8 +195,8 @@ onmessage = ({data: m}) => {
   }
   // recien vuelta la mesa: se busca en las vistas guardadas, por si el celular se movio mientras no se la veia
   if (relocFor > 0 && relocFor-- % 3 === 0) { const r = relocalize(qF, t); if (r) { qc = r; valid = reloc = true; relocFor = 0 } }
-  if (valid) { cOk = c.slice(); tOk = t }
   const qv = qmul(qc, qF) // orientacion corregida de este cuadro
+  if (valid) { cOk = c.slice(); tOk = t; const n = Math.hypot(...qv), r = qmul(qv, qinv(m.q)); qb = r.map((a) => a / n) }
   // mientras se busca la mesa en las vistas guardadas no se guardan vistas nuevas: podrian estar corridas respecto al plato
   if (valid && ++frameNo % 5 === 0 && relocFor <= 0) addKeyframe(qv)
   // puntos nuevos en las zonas de la imagen que se quedaron sin puntos, solo desde una pose validada (o la ultima buena si no
@@ -213,7 +217,7 @@ onmessage = ({data: m}) => {
   }
   ;[prevPyr, currPyr] = [currPyr, prevPyr]
   const state = valid ? 'seguimiento' : bad ? 'degradado' : relocFor > 0 ? 'relocalizando' : 'perdido'
-  postMessage({tracking: valid, reloc, state, t, flow, c, qc, qv, n: pts.length, kf: kfs.length, ms: performance.now() - t1,
+  postMessage({tracking: valid, reloc, state, t, flow, c, qc: qb, qv, n: pts.length, kf: kfs.length, ms: performance.now() - t1,
     // ?debug: los puntos para dibujarlos, y el inicio de la fila 3 del cuadro (las pruebas automaticas leen ahi el numero de cuadro)
     ...(m.debug && {xy: pts.flatMap((p) => [p.x, p.y]), strip: Array.from(prevPyr.data[0].data.subarray(3 * w, 3 * w + 60))})})
 }
