@@ -66,8 +66,12 @@ const CADA = 200 // ms entre intentos de foto: en cada punto quedan varias candi
 const fotos = VUELTAS.map(() => new Array(N).fill(null)) // {blob, nitidez}
 let vuelta = 0, grabando = false, sensor = null, ocupado = false, intento = 0, stream = null, archivo = null
 
-addEventListener('deviceorientation', (e) => {
-  if (e.alpha == null) return
+// En Android sin giroscopio (p. ej. Honor LLY-LX3) Chrome arma 'deviceorientation' solo con el acelerometro: alpha queda fijo
+// en 0 y el dial nunca gira. 'deviceorientationabsolute' trae el giro de la brujula; iOS no lo tiene y usa el relativo
+let absoluto = false
+addEventListener('deviceorientationabsolute', (e) => { if (e.alpha != null) { absoluto = true; leer(e) } })
+addEventListener('deviceorientation', (e) => { if (!absoluto && e.alpha != null) leer(e) })
+function leer(e) {
   // hacia donde mira la camara trasera (eje -Z del celular), en ejes de la mesa: x este, y norte, z arriba (W3C).
   // Vale con el celular horizontal o vertical; el norte no importa (en iOS alpha es relativo), solo que sea el mismo
   const a = e.alpha * rad, b = e.beta * rad, g = e.gamma * rad
@@ -78,7 +82,7 @@ addEventListener('deviceorientation', (e) => {
     alto: Math.asin(Math.max(-1, Math.min(1, -f[2]))) / rad,
     lado: (Math.atan2(f[0], f[1]) / rad + 540) % 360, // el celular esta del lado opuesto a donde mira
   }
-})
+}
 
 const chico = document.createElement('canvas'), grande = document.createElement('canvas')
 chico.width = 240; chico.height = 135
@@ -125,7 +129,7 @@ function cuadro() {
     if (fotos[vuelta].filter(Boolean).length >= LISTA) avanzar()
   }
   const v = $('cam'), total = fotos.flat().filter(Boolean).length
-  $('datos').textContent = v.videoWidth ? `${v.videoWidth}×${v.videoHeight} · ${total} fotos` + (sensor ? ` · ${Math.round(sensor.alto)}°` : '') : ''
+  $('datos').textContent = v.videoWidth ? `${v.videoWidth}×${v.videoHeight} · ${total} fotos` + (sensor ? ` · ${Math.round(sensor.alto)}° · lado ${Math.round(sensor.lado)}°` : '') : ''
   dibujar()
 }
 function dibujar() {
