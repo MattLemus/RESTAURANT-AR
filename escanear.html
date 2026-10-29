@@ -193,9 +193,14 @@ $('empezar').onclick = async () => {
   setTimeout(() => { if (!sensor) $('pista').textContent = 'Este celular no entrega el sensor de movimiento' }, 2500)
 }
 $('terminar').onclick = terminar
+function guardar() { // Chrome en Android no comparte .zip ni mas de 50 MB: se guarda y se adjunta en WhatsApp como documento
+  const a = document.createElement('a'); a.href = URL.createObjectURL(archivo); a.download = archivo.name; a.click()
+  $('titulo').textContent = 'Fotos guardadas en el celular'
+  $('pista').textContent = `Ahora en WhatsApp: 📎 → Documento → ${archivo.name}`
+}
 $('enviar').onclick = () => {
-  if (navigator.canShare && navigator.canShare({files: [archivo]})) navigator.share({files: [archivo], title: 'Fotos del plato'}).catch(() => {})
-  else { const a = document.createElement('a'); a.href = URL.createObjectURL(archivo); a.download = archivo.name; a.click() }
+  if (!navigator.canShare?.({files: [archivo]})) return guardar()
+  navigator.share({files: [archivo], title: 'Fotos del plato'}).catch((e) => { if (e.name !== 'AbortError') guardar() }) // AbortError: lo cancelo la persona
 }
 $('otra').onclick = () => location.reload()
 requestAnimationFrame(cuadro)
