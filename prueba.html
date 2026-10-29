@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prueba fritada</title>
+<style>
+  body{margin:0;font-family:system-ui,sans-serif;background:#fff;color:#111}
+  #log{margin:8px;padding:8px;border:2px solid #111;border-radius:8px;font:15px/1.4 monospace;white-space:pre-wrap;word-break:break-word}
+</style>
+</head>
+<body>
+<!-- Pagina de diagnostico (no es para clientes): mismo visor y mismo plato que fritada.html, y muestra en pantalla
+     que pasa al cargar, para ver por que en un Samsung con ARCore no aparecia el plato. Sintaxis vieja (var, function)
+     a proposito: si el Chrome es muy viejo, esta parte igual corre y lo dice. -->
+<div id="log"></div>
+<script>
+  var t0 = Date.now(), lines = [], estado = 'empezando'
+  function log(s) { lines.push(((Date.now() - t0) / 1000).toFixed(1) + 's  ' + s); pinta() }
+  function pinta() { document.getElementById('log').textContent = 'Ahora: ' + estado + ' (' + ((Date.now() - t0) / 1000).toFixed(0) + 's)\n\n' + lines.join('\n') }
+  setInterval(pinta, 1000)
+  window.addEventListener('error', function (e) { log('ERROR: ' + e.message + ' ' + (e.filename || '') + ':' + (e.lineno || '')) })
+  window.addEventListener('unhandledrejection', function (e) { log('ERROR: ' + (e.reason && e.reason.message || e.reason)) })
+
+  var m = navigator.userAgent.match(/Chrome\/([\d.]+)/)
+  log('Chrome: ' + (m ? m[1] : 'no es Chrome') + '\n      ' + navigator.userAgent)
+  var c = navigator.connection
+  if (c) log('Red: ' + c.effectiveType + ', ' + c.downlink + ' Mbps' + (c.saveData ? ', AHORRO DE DATOS ACTIVADO' : ''))
+  var gl2 = document.createElement('canvas').getContext('webgl2'), gl = gl2 || document.createElement('canvas').getContext('webgl')
+  log('WebGL2: ' + (gl2 ? 'si' : 'NO') + ', WebGL1: ' + (gl ? 'si' : 'NO'))
+  if (gl) {
+    var dbg = gl.getExtension('WEBGL_debug_renderer_info')
+    log('Grafica: ' + gl.getParameter(dbg ? dbg.UNMASKED_RENDERER_WEBGL : gl.RENDERER) + ', textura max ' + gl.getParameter(gl.MAX_TEXTURE_SIZE))
+  }
+  if (navigator.xr) navigator.xr.isSessionSupported('immersive-ar').then(function (s) { log('WebXR AR: ' + (s ? 'si' : 'no')) }, function (e) { log('WebXR AR: error ' + e) })
+  else log('WebXR: no existe')
+  estado = 'bajando el visor 3D'
+  setTimeout(function () { if (!window.customElements || !customElements.get('model-viewer')) log('A los 15 s el visor 3D todavia no arranco') }, 15000)
+</script>
+<script nomodule>log('ERROR: este Chrome no soporta modulos, el visor 3D no puede correr')</script>
+<script type="module" src="https://unpkg.com/@google/model-viewer@4.0.0/dist/model-viewer.min.js" onerror="log('ERROR: no se pudo bajar el visor 3D (unpkg.com)')"></script>
+<model-viewer src="fritada.glb" camera-controls tone-mapping="neutral" shadow-intensity="1" alt="Fritada" style="width:100%;height:55vh"></model-viewer>
+<script>
+  var mv = document.querySelector('model-viewer'), ultimo = -1
+  if (window.customElements) customElements.whenDefined('model-viewer').then(function () { log('Visor 3D listo'); estado = 'bajando el plato (4.7 MB)' })
+  mv.addEventListener('progress', function (e) {
+    var p = Math.floor(e.detail.totalProgress * 10) * 10
+    if (p !== ultimo) { ultimo = p; log('Plato: ' + p + '%') }
+  })
+  mv.addEventListener('load', function () { estado = 'LISTO, el plato deberia verse'; log('Plato cargado. Boton AR posible: ' + (mv.canActivateAR ? 'si' : 'no')) })
+  mv.addEventListener('error', function (e) { estado = 'FALLO'; log('ERROR del visor: ' + (e.detail && (e.detail.type + ' ' + (e.detail.sourceError || '')))) })
+</script>
+</body>
+</html>
