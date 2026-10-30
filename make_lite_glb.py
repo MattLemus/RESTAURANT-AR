@@ -4,8 +4,11 @@
 import sys
 import bpy
 
-src, dst = sys.argv[sys.argv.index('--') + 1:][:2]
-TRIS = 80000
+a = sys.argv[sys.argv.index('--') + 1:]
+src, dst = a[:2]
+# maximo de triangulos. Los escaneos (scan/servidor.py) pasan uno alto: su textura son miles de trocitos y reducir la malla
+# despues de texturizar los mezcla (puntos negros por todo el plato); OpenMVS ya la reduce antes de texturizar
+TRIS = int(a[2]) if len(a) > 2 else 80000
 
 bpy.ops.object.select_all(action='SELECT')
 bpy.ops.object.delete()

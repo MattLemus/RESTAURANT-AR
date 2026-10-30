@@ -4,206 +4,152 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Escanear plato</title>
+<script type="module" src="https://unpkg.com/@google/model-viewer@4.0.0/dist/model-viewer.min.js"></script>
 <style>
-html, body { margin: 0; height: 100%; background: #000; color: #fff; font-family: -apple-system, system-ui, sans-serif; overflow: hidden; -webkit-user-select: none; user-select: none }
-video { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: cover }
-#mira { position: fixed; left: 50%; top: 45%; width: 56vmin; height: 56vmin; transform: translate(-50%, -50%); border: 2px dashed #fffb; border-radius: 28px; pointer-events: none }
-#arriba { position: fixed; top: 0; left: 0; right: 0; padding: calc(env(safe-area-inset-top) + 10px) 16px 18px; text-align: center; background: linear-gradient(#000b, #0000) }
-#paso { font-size: 13px; letter-spacing: .1em; opacity: .8 }
-#titulo { font-size: 21px; font-weight: 700; margin-top: 2px }
-#pista { font-size: 17px; color: #ffd166; min-height: 22px; margin-top: 2px }
-#dial { position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom) + 72px); transform: translateX(-50%); width: 210px; height: 210px }
-#abajo { position: fixed; left: 0; right: 0; bottom: 0; padding: 10px 16px calc(env(safe-area-inset-bottom) + 12px); display: flex; gap: 10px; justify-content: center }
-button { font: 600 17px system-ui; padding: 13px 20px; border-radius: 14px; border: 0; background: #2f6bff; color: #fff }
-button.gris { background: #3a3a3a }
-#inicio { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 24px; background: #000e; text-align: center }
-#inicio ol { text-align: left; max-width: 420px; line-height: 1.45; font-size: 17px; padding-left: 22px; margin: 0 }
-#error { color: #ff8a80 }
-#datos { position: fixed; right: 8px; bottom: calc(env(safe-area-inset-bottom) + 64px); font-size: 11px; opacity: .55; text-align: right }
-@media (orientation: landscape) { /* celular horizontal: el dial va a la derecha para no tapar el plato */
-  #dial { left: auto; right: calc(env(safe-area-inset-right) + 10px); top: 54%; bottom: auto; transform: translateY(-50%); width: min(44vh, 200px); height: min(44vh, 200px) }
-  #mira { top: 54% } #datos { bottom: 8px } #arriba { padding-bottom: 8px } }
+:root { --fondo: #0f1012; --tarjeta: #1b1d21; --texto: #f2f2f2; --suave: #a9adb5; --azul: #2f6bff; --verde: #2ee66b; --rojo: #ff8a80 }
+html, body { margin: 0; background: var(--fondo); color: var(--texto); font-family: -apple-system, system-ui, sans-serif }
+main { max-width: 480px; margin: 0 auto; padding: calc(env(safe-area-inset-top) + 18px) 16px calc(env(safe-area-inset-bottom) + 24px) }
+h1 { font-size: 26px; margin: 4px 0 12px } h2 { font-size: 22px; margin: 8px 0 12px }
+svg.dibujo { display: block; width: 100%; height: auto; background: var(--tarjeta); border-radius: 18px }
+ol { padding-left: 22px; line-height: 1.45; font-size: 17px; margin: 16px 0 }
+li { margin-bottom: 8px } b { color: #fff }
+label.campo { display: flex; align-items: center; gap: 8px; font-size: 16px; color: var(--suave); margin: 8px 0 18px }
+label.campo input { width: 70px; font: inherit; font-size: 18px; padding: 8px; border-radius: 10px; border: 1px solid #3a3d44; background: var(--tarjeta); color: var(--texto); text-align: center }
+.boton { display: block; text-align: center; font: 600 19px system-ui; padding: 16px; border-radius: 16px; border: 0; background: var(--azul); color: #fff; text-decoration: none; margin: 10px 0; cursor: pointer }
+.gris { background: #33363c }
+.enlace { display: block; text-align: center; color: var(--suave); font-size: 16px; padding: 12px; text-decoration: underline; cursor: pointer }
+.barra { height: 12px; background: var(--tarjeta); border-radius: 6px; overflow: hidden; margin: 14px 0 }
+.barra div { height: 100%; width: 0; background: var(--verde); transition: width .3s }
+#e-texto { color: var(--suave); font-size: 16px; line-height: 1.45; white-space: pre-line }
+#e-error { color: var(--rojo); font-size: 17px; line-height: 1.45 }
+model-viewer { width: 100%; height: 55vh; background: var(--tarjeta); border-radius: 18px }
 [hidden] { display: none !important }
 </style>
 </head>
 <body>
-<video id="cam" playsinline muted autoplay></video>
-<div id="mira"></div>
-<div id="arriba"><div id="paso"></div><div id="titulo"></div><div id="pista"></div></div>
-<canvas id="dial"></canvas>
-<div id="datos"></div>
-<div id="abajo">
-  <button id="terminar" class="gris" hidden>Terminar</button>
-  <button id="enviar" hidden>Enviar fotos</button>
-  <button id="otra" class="gris" hidden>Repetir</button>
-</div>
-<div id="inicio">
-  <h2 style="margin:0">Escanear plato en 3D</h2>
-  <ol>
-    <li>Plato en la mesa, donde puedas caminar alrededor.</li>
-    <li>Celular <b>horizontal</b>, a unos 40 cm, apuntando al centro del plato.</li>
-    <li>Camina alrededor del plato: los puntos se llenan solos. Son <b>3 vueltas</b>: alta, media y baja.</li>
-  </ol>
-  <button id="empezar">Empezar</button>
-  <div id="error"></div>
-</div>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<main>
+  <section id="inicio">
+    <h1>Escanear plato en 3D</h1>
+    <svg class="dibujo" viewBox="0 0 320 170" aria-label="Una vuelta alrededor del plato con el celular vertical">
+      <ellipse cx="160" cy="112" rx="132" ry="44" fill="none" stroke="#2f6bff" stroke-width="3" stroke-dasharray="9 7"/>
+      <path d="M262 141 l14 -3 l-6 13" fill="none" stroke="#2f6bff" stroke-width="3"/>
+      <ellipse cx="160" cy="112" rx="58" ry="19" fill="#e9e5dc"/><ellipse cx="160" cy="108" rx="34" ry="11" fill="#d9a441"/>
+      <rect x="40" y="30" width="26" height="46" rx="5" fill="#f2f2f2"/><rect x="44" y="35" width="18" height="34" rx="2" fill="#2f6bff"/>
+      <path d="M68 60 L130 100" stroke="#a9adb5" stroke-width="2" stroke-dasharray="4 4"/>
+      <text x="160" y="22" fill="#a9adb5" font-size="13" text-anchor="middle" font-family="system-ui">una vuelta · 1 minuto · plato al centro</text>
+    </svg>
+    <ol>
+      <li><b>Una sola vuelta</b> alrededor del plato, despacio: más o menos <b>1 minuto</b>.</li>
+      <li>Celular <b>vertical</b>, a media altura, con el plato <b>siempre en el centro</b>.</li>
+      <li>Plato con comida en una mesa lisa. <b>No lo muevas</b> mientras grabas.</li>
+      <li>Luz pareja, sin sombras fuertes encima del plato.</li>
+    </ol>
+    <label class="campo">Diámetro del plato <input id="ancho" type="number" inputmode="numeric" value="27" min="8" max="60"> cm</label>
+    <label class="boton">Grabar la vuelta<input id="grabar" type="file" accept="video/*" capture="environment" hidden></label>
+    <label class="enlace">Ya la grabé: elegir el video<input id="elegir" type="file" accept="video/*" hidden></label>
+  </section>
+
+  <section id="envio" hidden>
+    <h2 id="e-titulo">Enviando el video…</h2>
+    <div class="barra"><div id="e-barra"></div></div>
+    <p id="e-texto"></p>
+    <p id="e-error" hidden></p>
+    <button id="e-otra" class="boton gris" hidden>Grabar otra vez</button>
+  </section>
+
+  <section id="listo" hidden>
+    <h2>¡Tu plato en 3D!</h2>
+    <model-viewer id="mv" camera-controls auto-rotate tone-mapping="neutral" shadow-intensity="1" alt="Plato escaneado"></model-viewer>
+    <a id="ar" class="boton">Ver en mi mesa (AR)</a>
+    <button id="l-otra" class="boton gris">Escanear otro plato</button>
+  </section>
+</main>
 <script>
-// Captura guiada para el escaneo 3D (como el Object Capture de Apple): el sensor de movimiento dice desde que lado y a que
-// altura miras el plato; cada punto del dial es un lado (cada 10 grados) de una vuelta y se llena con la foto mas nitida
-// tomada ahi. Las fotos salen del video de la camara en su resolucion completa y se mandan juntas en un zip
-// (WhatsApp no comprime documentos). En la PC: scan/procesar.py plato.zip -> modelo 3D.
+// Escaneo como AR Code con video ("Optimal video length: 1-1.5 minutes", cualquier celular): la camara del celular graba
+// una vuelta (su app de camara codifica con el chip; Chrome en el Honor no podia), el video sube al servidor
+// (scan/servidor.py) y el modelo vuelve a esta pagina. Sin servidor (GitHub Pages) se manda por WhatsApp como documento.
 const $ = (id) => document.getElementById(id)
-const rad = Math.PI / 180
-const N = 36 // puntos por vuelta
-const VUELTAS = [ // min/max: grados que la camara mira hacia abajo
-  {nombre: 'Alta', min: 50, max: 80, color: '#2ee66b', texto: 'mirando el plato desde arriba'},
-  {nombre: 'Media', min: 28, max: 50, color: '#ffc21a', texto: 'a media altura'},
-  {nombre: 'Baja', min: 8, max: 28, color: '#ff6a1a', texto: 'casi a ras de la mesa'},
-]
-const LISTA = 33 // con 33 de 36 puntos la vuelta cuenta como hecha
-const CADA = 200 // ms entre intentos de foto: en cada punto quedan varias candidatas y gana la mas nitida
-const fotos = VUELTAS.map(() => new Array(N).fill(null)) // {blob, nitidez}
-let vuelta = 0, grabando = false, sensor = null, ocupado = false, intento = 0, stream = null, archivo = null
+const mostrar = (id) => ['inicio', 'envio', 'listo'].forEach((s) => { $(s).hidden = s !== id })
+const recordar = (id) => { try { id ? localStorage.setItem('escaneo', id) : localStorage.removeItem('escaneo') } catch (e) {} }
+let reloj = null
 
-// En Android sin giroscopio (p. ej. Honor LLY-LX3) Chrome arma 'deviceorientation' solo con el acelerometro: alpha queda fijo
-// en 0 y el dial nunca gira. 'deviceorientationabsolute' trae el giro de la brujula; iOS no lo tiene y usa el relativo
-let absoluto = false
-addEventListener('deviceorientationabsolute', (e) => { if (e.alpha != null) { absoluto = true; leer(e) } })
-addEventListener('deviceorientation', (e) => { if (!absoluto && e.alpha != null) leer(e) })
-function leer(e) {
-  // hacia donde mira la camara trasera (eje -Z del celular), en ejes de la mesa: x este, y norte, z arriba (W3C).
-  // Vale con el celular horizontal o vertical; el norte no importa (en iOS alpha es relativo), solo que sea el mismo
-  const a = e.alpha * rad, b = e.beta * rad, g = e.gamma * rad
-  const f = [-Math.cos(a) * Math.sin(g) - Math.sin(a) * Math.sin(b) * Math.cos(g),
-    -Math.sin(a) * Math.sin(g) + Math.cos(a) * Math.sin(b) * Math.cos(g),
-    -Math.cos(b) * Math.cos(g)]
-  sensor = {
-    alto: Math.asin(Math.max(-1, Math.min(1, -f[2]))) / rad,
-    lado: (Math.atan2(f[0], f[1]) / rad + 540) % 360, // el celular esta del lado opuesto a donde mira
-  }
+function error(texto) {
+  $('e-titulo').textContent = 'No se pudo'
+  $('e-error').textContent = texto; $('e-error').hidden = false
+  $('e-otra').hidden = false
+  clearInterval(reloj); recordar(null)
 }
+const duracionDe = (f) => new Promise((ok) => { // si el navegador no puede leer el video, lo revisa el servidor
+  const v = document.createElement('video'); v.preload = 'metadata'; v.src = URL.createObjectURL(f)
+  v.onloadedmetadata = () => ok(v.duration); v.onerror = () => ok(0); setTimeout(() => ok(0), 4000)
+})
 
-const chico = document.createElement('canvas'), grande = document.createElement('canvas')
-chico.width = 240; chico.height = 135
-function nitidez(v) { // varianza del Laplaciano en el centro del cuadro: un cuadro movido da menos
-  const cx = chico.getContext('2d', {willReadFrequently: true}), w = v.videoWidth / 4, h = v.videoHeight / 4
-  cx.drawImage(v, (v.videoWidth - w) / 2, (v.videoHeight - h) / 2, w, h, 0, 0, 240, 135)
-  const d = cx.getImageData(0, 0, 240, 135).data, W = 240, gris = new Float32Array(W * 135)
-  for (let i = 0; i < gris.length; i++) gris[i] = d[i * 4] * 0.3 + d[i * 4 + 1] * 0.59 + d[i * 4 + 2] * 0.11
-  let s = 0, s2 = 0, n = 0
-  for (let y = 1; y < 134; y++) for (let x = 1; x < W - 1; x++) {
-    const i = y * W + x, l = 4 * gris[i] - gris[i - 1] - gris[i + 1] - gris[i - W] - gris[i + W]
-    s += l; s2 += l * l; n++
+async function elegido(e) {
+  const f = e.target.files[0]
+  e.target.value = ''
+  if (!f) return
+  mostrar('envio'); $('e-error').hidden = $('e-otra').hidden = true
+  $('e-titulo').textContent = 'Enviando el video…'; $('e-barra').style.width = '0'
+  const seg = await duracionDe(f)
+  if (seg && seg < 15) return error(`El video dura ${Math.round(seg)} segundos. Graba una vuelta completa, despacio (alrededor de 1 minuto).`)
+  // sin nuestro servidor (GitHub Pages responde HTML, no JSON) no se sube nada: serian 100+ MB de datos del celular para nada
+  const servidor = await fetch('/estado?id=prueba', {cache: 'no-store'}).then((r) => (r.headers.get('content-type') || '').includes('json'), () => false)
+  if (!servidor) return error('El video quedó guardado en tu galería. Desde aquí no se procesa: mándalo por WhatsApp como documento (📎 → Documento).')
+  const ancho = Math.min(60, Math.max(8, +$('ancho').value || 27))
+  let candado = null
+  try { candado = await navigator.wakeLock.request('screen') } catch (e) { /* sin wake lock igual sube */ }
+  const x = new XMLHttpRequest()
+  x.open('POST', `/subir?ancho=${ancho}`)
+  x.setRequestHeader('Content-Type', f.type || 'video/mp4')
+  x.upload.onprogress = (p) => {
+    $('e-barra').style.width = (p.loaded / p.total * 100).toFixed(1) + '%'
+    $('e-texto').textContent = `${Math.round(p.loaded / 1e6)} de ${Math.round(p.total / 1e6)} MB`
   }
-  return s2 / n - (s / n) ** 2
-}
-async function foto(vu, k) {
-  ocupado = true
-  const v = $('cam'), n = nitidez(v), antes = fotos[vu][k]
-  if (!antes || n > antes.nitidez) {
-    grande.width = v.videoWidth; grande.height = v.videoHeight
-    grande.getContext('2d').drawImage(v, 0, 0)
-    const blob = await new Promise((r) => grande.toBlob(r, 'image/jpeg', 0.92))
-    if (blob) fotos[vu][k] = {blob, nitidez: n}
+  x.onload = () => {
+    if (candado) candado.release().catch(() => {})
+    let r = {}
+    try { r = JSON.parse(x.responseText) } catch (e) { /* no es nuestro servidor */ }
+    if (x.status === 200 && r.id) return seguir(r.id)
+    error(r.error || 'Esta página no tiene a dónde enviar el video. Guárdalo y mándalo por WhatsApp como documento (📎 → Documento).')
   }
-  ocupado = false
+  x.onerror = () => error('Se cortó el envío. Revisa el WiFi y vuelve a elegir el video con "Ya la grabé".')
+  x.send(f)
 }
+$('grabar').onchange = $('elegir').onchange = elegido
 
-function avanzar() {
-  if (navigator.vibrate) navigator.vibrate(200)
-  vuelta++
-  if (vuelta === VUELTAS.length) terminar()
-}
-function cuadro() {
-  requestAnimationFrame(cuadro)
-  if (grabando && sensor) {
-    const V = VUELTAS[vuelta], k = Math.floor(sensor.lado / (360 / N)) % N
-    let pista = ''
-    if (sensor.alto > V.max) pista = '▼ baja un poco el celular'
-    else if (sensor.alto < V.min) pista = '▲ sube un poco el celular'
-    else if (!ocupado && performance.now() - intento > CADA) { intento = performance.now(); foto(vuelta, k) }
-    $('paso').textContent = `VUELTA ${vuelta + 1} DE ${VUELTAS.length}`
-    $('titulo').textContent = `${V.nombre}: ${V.texto}`
-    $('pista').textContent = pista
-    if (fotos[vuelta].filter(Boolean).length >= LISTA) avanzar()
+function seguir(id) { // el servidor tarda ~10 min: se puede cerrar la pagina y volver
+  recordar(id)
+  mostrar('envio'); $('e-error').hidden = $('e-otra').hidden = true
+  const t0 = Date.now()
+  const mirar = async () => {
+    let d
+    try { d = await (await fetch(`/estado?id=${id}`, {cache: 'no-store'})).json() } catch (e) { return } // sin red: reintenta
+    if (d.error) return error(d.error)
+    if (d.listo) { clearInterval(reloj); recordar(null); return verListo(d) }
+    const ahora = d.ahora || Date.now() / 1000 // la hora del servidor: la del celular puede estar corrida (salia "-1 min")
+    const min = Math.floor((ahora - (d.inicio || d.recibido || ahora)) / 60)
+    $('e-titulo').textContent = 'Procesando tu plato…'
+    $('e-barra').style.width = ((d.n || 0.3) / (d.de || 4) * 100) + '%'
+    $('e-texto').textContent = (d.paso ? `Paso ${d.n} de ${d.de}: ${d.paso}` : 'En cola') + (d.detalle ? `\n(${d.detalle})` : '') +
+      `\n${min} min. Tarda unos 10 minutos; puedes cerrar esta página y volver.`
   }
-  const v = $('cam'), total = fotos.flat().filter(Boolean).length
-  $('datos').textContent = v.videoWidth ? `${v.videoWidth}×${v.videoHeight} · ${total} fotos` + (sensor ? ` · ${Math.round(sensor.alto)}° · lado ${Math.round(sensor.lado)}°` : '') : ''
-  dibujar()
-}
-function dibujar() {
-  const c = $('dial'), r = devicePixelRatio || 1, S = c.clientWidth
-  if (c.width !== Math.round(S * r)) c.width = c.height = Math.round(S * r)
-  const x = c.getContext('2d'), m = S / 2, giro = sensor ? sensor.lado : 0
-  x.setTransform(r, 0, 0, r, 0, 0); x.clearRect(0, 0, S, S)
-  x.fillStyle = '#0006'; x.beginPath(); x.arc(m, m, m, 0, 7); x.fill()
-  x.fillStyle = '#ffffff22'; x.beginPath(); x.arc(m, m, S * 0.15, 0, 7); x.fill() // el plato
-  VUELTAS.forEach((V, i) => {
-    const R = S * (0.23 + i * 0.1) // vuelta alta adentro, baja afuera (como vistas desde arriba)
-    for (let k = 0; k < N; k++) {
-      const ang = ((k + 0.5) * (360 / N) - giro + 90) * rad // tu lado del plato siempre queda abajo
-      const lleno = !!fotos[i][k]
-      x.fillStyle = lleno ? V.color : i === vuelta && grabando ? '#ffffff66' : '#ffffff1f'
-      x.beginPath(); x.arc(m + R * Math.cos(ang), m + R * Math.sin(ang), lleno ? 3.6 : 2.4, 0, 7); x.fill()
-    }
-  })
-  if (grabando) { // tu
-    x.fillStyle = '#fff'; x.beginPath(); x.moveTo(m, S * 0.955 - 12); x.lineTo(m - 8, S * 0.955); x.lineTo(m + 8, S * 0.955); x.fill()
-  }
-  if (vuelta < VUELTAS.length) {
-    x.fillStyle = '#fff'; x.font = `600 ${Math.round(S * 0.075)}px system-ui`; x.textAlign = 'center'; x.textBaseline = 'middle'
-    x.fillText(`${fotos[vuelta].filter(Boolean).length}/${N}`, m, m)
-  }
+  clearInterval(reloj); reloj = setInterval(mirar, 4000); mirar()
 }
 
-async function terminar() {
-  grabando = false
-  $('terminar').hidden = true
-  $('paso').textContent = ''; $('pista').textContent = ''
-  $('titulo').textContent = 'Preparando las fotos…'
-  const zip = new JSZip()
-  let n = 0
-  fotos.forEach((vu, i) => vu.forEach((f, k) => { if (f) { zip.file(`v${i + 1}_${String(k).padStart(2, '0')}.jpg`, f.blob); n++ } }))
-  const blob = await zip.generateAsync({type: 'blob', compression: 'STORE'}) // los JPG ya vienen comprimidos
-  const hora = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')
-  archivo = new File([blob], `plato_${hora}.zip`, {type: 'application/zip'})
-  if (stream) stream.getTracks().forEach((t) => t.stop())
-  $('titulo').textContent = `¡Listo! ${n} fotos (${Math.round(blob.size / 1e6)} MB)`
-  $('pista').textContent = 'Toca "Enviar fotos" y mándalas por WhatsApp'
-  $('enviar').hidden = $('otra').hidden = false
+function verListo(d) {
+  $('mv').src = d.glb
+  const ios = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+  if (ios) { // Quick Look de Apple: el USDZ sobre la mesa a tamaño real
+    $('ar').href = d.usdz; $('ar').rel = 'ar'
+    $('ar').innerHTML = '<img alt="" width="1" height="1" src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==">Ver en mi mesa (AR)'
+  } else $('ar').href = 'fritada-ar.html?glb=' + encodeURIComponent(d.glb) // tambien en celulares sin ARCore
+  mostrar('listo')
 }
+$('e-otra').onclick = $('l-otra').onclick = () => { recordar(null); mostrar('inicio') }
 
-$('empezar').onclick = async () => {
-  try { // iOS pide permiso para el sensor tras un toque
-    if (typeof DeviceOrientationEvent !== 'undefined' && DeviceOrientationEvent.requestPermission) await DeviceOrientationEvent.requestPermission()
-  } catch (e) { /* sin permiso igual se muestra la camara y el aviso de abajo */ }
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({audio: false, video: {facingMode: {ideal: 'environment'}, width: {ideal: 3840}, height: {ideal: 2160}}})
-  } catch (e) {
-    $('error').textContent = 'No se pudo abrir la cámara: ' + e.message
-    return
-  }
-  const v = $('cam')
-  v.srcObject = stream
-  await v.play().catch(() => {})
-  if (navigator.wakeLock) navigator.wakeLock.request('screen').catch(() => {})
-  $('inicio').hidden = true; $('terminar').hidden = false
-  grabando = true
-  setTimeout(() => { if (!sensor) $('pista').textContent = 'Este celular no entrega el sensor de movimiento' }, 2500)
-}
-$('terminar').onclick = terminar
-function guardar() { // Chrome en Android no comparte .zip ni mas de 50 MB: se guarda y se adjunta en WhatsApp como documento
-  const a = document.createElement('a'); a.href = URL.createObjectURL(archivo); a.download = archivo.name; a.click()
-  $('titulo').textContent = 'Fotos guardadas en el celular'
-  $('pista').textContent = `Ahora en WhatsApp: 📎 → Documento → ${archivo.name}`
-}
-$('enviar').onclick = () => {
-  if (!navigator.canShare?.({files: [archivo]})) return guardar()
-  navigator.share({files: [archivo], title: 'Fotos del plato'}).catch((e) => { if (e.name !== 'AbortError') guardar() }) // AbortError: lo cancelo la persona
-}
-$('otra').onclick = () => location.reload()
-requestAnimationFrame(cuadro)
+let pendiente = null
+try { pendiente = localStorage.getItem('escaneo') } catch (e) {}
+if (pendiente) seguir(pendiente)
 </script>
 </body>
 </html>
