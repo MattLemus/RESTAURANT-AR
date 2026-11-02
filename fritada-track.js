@@ -16,6 +16,30 @@ let cOk = c.slice(), tOk = 0, bad = 0, kfs = [], relocFor = 0 // ultima pose val
 // error del sensor de orientacion medido por la imagen. En celulares sin giroscopio (solo acelerometro + brujula) la brujula se
 // desvia varios grados (mas cerca de metal) y casi no cambia de un cuadro al otro: se arrastra en vez de volver a cero
 let qb = [0, 0, 0, 1], qvPrev = null, flowPrev = [0, 0]
+// ...pero solo en el giro horizontal: la inclinacion (donde esta el piso) la da bien el acelerometro. Aprendiendo tambien la
+// inclinacion, cada error chico de la imagen se sumaba sin volver nunca a cero: la mesa virtual se ladeaba de a poco (con
+// teclado y plato sobresaliendo de la mesa, 2-4 grados en 90 s simulados) y el plato se veia como desde arriba (prueba 01-11)
+const soloGiro = (q) => { const n = Math.hypot(q[1], q[3]); return [0, q[1] / n, 0, q[3] / n] }
+// Y si la imagen sostiene una inclinacion distinta a la del acelerometro (mapa de puntos armado desde una pose ladeada: el ajuste
+// lo defiende cuadro a cuadro), se la lleva al piso de a poco, como un estabilizador. Solo un error grande y sostenido: mediana de
+// los ultimos 3 s (un empujon de la mano mueve el acelerometro menos de 1 s) y mas de 3 grados (menos no se nota; cada correccion
+// corre un poco el plato, y el atraso del sensor al girar ya da ~1 grado). Se corrige en ~1 s girando alrededor de la mesa que se ve (donde suele estar el plato: asi
+// no se corre en la imagen; girando alrededor del celular se corria ~30 px) y los puntos se rehacen desde la pose corregida
+const desv = [] // [hora, giro en x, giro en z] que llevaria el piso de la imagen al del acelerometro (ejes del mundo, rad)
+const aPlomo = (qv, q, t, dt) => {
+  const s = qrot(qv, qrot(qinv(q), [0, -1, 0])) // el piso del acelerometro, en el mundo de la imagen
+  desv.push([t, s[2], -s[0]]) // cruz(s, abajo)
+  while (desv[0][0] < t - 3000) desv.shift()
+  const ex = median(desv.map((d) => d[1])), ez = median(desv.map((d) => d[2]))
+  if (desv.length < 30 || Math.hypot(ex, ez) < 0.052 || !dt) return qv
+  const k = Math.min(1, dt), x = ex * k, z = ez * k, a = Math.hypot(x, z), sn = Math.sin(a / 2) / a, r = [x * sn, 0, z * sn, Math.cos(a / 2)]
+  for (const d of desv) { d[1] -= x; d[2] -= z }
+  const o = [median(pts.map((p) => p.P[0])), 0, median(pts.map((p) => p.P[2]))], v = qrot(r, [c[0] - o[0], c[1], c[2] - o[2]])
+  c.splice(0, 3, o[0] + v[0], v[1], o[2] + v[2])
+  qv = qmul(r, qv)
+  for (const p of pts) { const d = qrot(qv, p.b); if (d[1] < -0.05) { const l = -c[1] / d[1]; p.P = [c[0] + d[0] * l, 0, c[2] + d[2] * l] } }
+  return qv
+}
 const A = new Float64Array(42)
 
 // cuaterniones [x, y, z, w] y vectores [x, y, z], con las mismas formulas que three.js
@@ -149,7 +173,7 @@ const plausible = (qc, t) => {
 // seguimiento perdido de verdad (no por un cuadro atrasado): se vuelve a la ultima pose buena y se busca la mesa en las vistas
 // guardadas, ya mismo (tiron con la mesa a la vista) y otra vez cuando la mesa vuelve a verse (se miro a otro lado un rato)
 let lost = false
-const lose = () => { pts = []; bad = 0; c.splice(0, 3, ...cOk); lost = true; if (kfs.length) relocFor = 30 }
+const lose = () => { pts = []; desv.length = 0; bad = 0; c.splice(0, 3, ...cOk); lost = true; if (kfs.length) relocFor = 30 }
 
 // --- vistas guardadas para reencontrar la mesa (seccion 10) ---
 // Descriptores ORB de los puntos seguidos + su lugar en la mesa. El angulo de cada descriptor es la direccion en la imagen del
@@ -231,7 +255,7 @@ onmessage = ({data: m}) => {
   const t0 = performance.now(), {bmp, t, id} = m, w = bmp.width, h = bmp.height, st = {}
   const qF = qmul(qb, m.q) // orientacion del sensor con su error ya conocido descontado
   if (w !== tw || h !== th) { // primer cuadro o el celular cambio de orientacion: se empieza de cero
-    tw = w; th = h; pts = []; kfs = []
+    tw = w; th = h; pts = []; kfs = []; desv.length = 0
     focal = (Math.max(w, h) / 2) / Math.tan(fov * Math.PI / 360)
     ctx = new OffscreenCanvas(w, h).getContext('2d', {willReadFrequently: true})
     prevPyr = new jsfeat.pyramid_t(LEVELS); currPyr = new jsfeat.pyramid_t(LEVELS)
@@ -280,8 +304,8 @@ onmessage = ({data: m}) => {
   // recien perdida la mesa: se busca en las vistas guardadas, por si el celular se movio mientras no se la veia
   if (relocFor > 0 && relocFor-- % 3 === 0) { const r = relocalize(qF, t); if (r) { qc = r; valid = reloc = true; relocFor = 0 } }
   const t3 = performance.now(); st.reloc = t3 - t2
-  const qv = qmul(qc, qF) // orientacion corregida de este cuadro
-  if (valid) { cOk = c.slice(); tOk = t; const n = Math.hypot(...qv), r = qmul(qv, qinv(m.q)); qb = r.map((a) => a / n); qvPrev = qv }
+  let qv = qmul(qc, qF) // orientacion corregida de este cuadro
+  if (valid) { qv = aPlomo(qv, m.q, t, dt); cOk = c.slice(); tOk = t; qb = soloGiro(qmul(qv, qinv(m.q))); qvPrev = qv }
   // mientras se busca la mesa en las vistas guardadas no se guardan vistas nuevas: podrian estar corridas respecto al plato
   if (valid && ++frameNo % 5 === 0 && relocFor <= 0) addKeyframe(qv)
   const t4 = performance.now(); st.kf = t4 - t3

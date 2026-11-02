@@ -154,6 +154,14 @@ addEventListener('devicemotion', (e) => {
   hasGyro = true
   rates.push([e.timeStamp || performance.now(), Math.hypot(r.alpha, r.beta, r.gamma) * Math.PI / 180]); if (rates.length > 60) rates.shift()
 })
+// movimientos MUY bruscos (prueba 01-11): sin giroscopio la inclinacion sale del acelerometro, que no distingue la gravedad del
+// empujon de la mano; el plato se despegaba de la mesa, se ladeaba y quedaba asi. Mientras dure (y 0.6 s despues, lo que tarda
+// el sensor en asentarse) no se sigue: el plato queda en su ultima pose buena y el seguidor no aprende nada de esos cuadros
+let bruscoHasta = 0
+addEventListener('devicemotion', (e) => {
+  const a = e.accelerationIncludingGravity
+  if (!hasGyro && a && a.x != null && Math.abs(Math.hypot(a.x, a.y, a.z) - 9.81) > 4) bruscoHasta = performance.now() + 600
+})
 const rateBetween = (t0, t1) => { let s = 0, n = 0; for (const [t, v] of rates) if (t > t0 && t <= t1) { s += v; n++ } return n ? s / n : 0 }
 // iOS exige un permiso tras un toque; Chrome Android tambien expone requestPermission, por eso se escucha siempre
 addEventListener('touchend', () => {
@@ -173,6 +181,7 @@ const retire = [] // cuadros ya reemplazados en pantalla: se liberan despues del
 const drop = (f) => { f.full.close(); f.small?.close() }
 const send = (f) => {
   if (!gotSensor) { f.small.close(); f.small = null; return present(f, null) } // sin sensor no hay seguimiento: se muestra la camara igual
+  if (performance.now() < bruscoHasta) { f.small.close(); f.small = null; return present(f, null) } // bloqueado: ver bruscoHasta
   active = f; f.sent = performance.now()
   tracker.postMessage({id: f.id, bmp: f.small, t: f.t, q: sensorAt(f.t, tmp).toArray(), gyro: hasGyro, debug: DEBUG}, [f.small]); f.small = null
 }
@@ -288,6 +297,9 @@ const loader = new GLTFLoader(); loader.setDRACOLoader(draco)
 let plateReady = false
 loader.load(q.get('glb') || 'fritada.glb', (g) => { // ?glb=: un plato escaneado (escanear.html)
   plate = g.scene; scene.add(plate)
+  // la sombra mide como el plato que se cargo (0.32 m era para la fritada de 27 cm), sirve para cualquier plato
+  const sz = new THREE.Box3().setFromObject(plate).getSize(new THREE.Vector3()), w = Math.max(sz.x, sz.z) * 1.19
+  shadow.geometry.dispose(); shadow.geometry = new THREE.PlaneGeometry(w, w)
   // nitidez de las texturas al mirar el plato en angulo
   plate.traverse((o) => { const m = o.material; if (m) for (const k of ['map', 'normalMap']) if (m[k]) m[k].anisotropy = renderer.capabilities.getMaxAnisotropy() })
   plate.traverse((o) => {
@@ -295,8 +307,11 @@ loader.load(q.get('glb') || 'fritada.glb', (g) => { // ?glb=: un plato escaneado
     o.castShadow = true
     // Lambert = sin ningun reflejo, como el hot dog de Snapchat; el material PBR brillaba (comida "mojada") aunque fuera rugoso.
     // Color: tono calido de la luz de una sala (medido en la foto de un plato real: blanco crema, no blanco azulado)
+    // Un plato escaneado (?glb=) ya trae la luz real en sus fotos: sin luces ni tinte, igual que en la camara (con el tinte crema y
+    // las luces salia verde y oscuro, 31-10)
     const m = o.material
-    o.material = new THREE.MeshLambertMaterial({map: m.map, normalMap: m.normalMap, color: q.get('tint') ? '#' + q.get('tint') : 0xffecd8})
+    o.material = q.get('glb') && !q.get('tint') ? new THREE.MeshBasicMaterial({map: m.map, toneMapped: false})
+      : new THREE.MeshLambertMaterial({map: m.map, normalMap: m.normalMap, color: q.get('tint') ? '#' + q.get('tint') : 0xffecd8})
     m.dispose()
   })
   // los programas de la GPU se preparan antes de mostrar el plato: compilarlos al aparecer trababa ese primer cuadro
