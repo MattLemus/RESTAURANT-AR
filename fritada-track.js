@@ -13,6 +13,7 @@ let maxp = 60 // presupuesto de puntos: baja si el celular tarda, sube si le sob
 let fov = 67, tw = 0, th = 0, focal = 1, ctx, prevPyr, currPyr, corners, blur, pts = [], lastT = 0, thr = 10, frameNo = 0, msAvg = 0
 const c = [0, 0.45, 0] // posicion del celular (m); la mesa es el plano y = 0
 let cOk = c.slice(), tOk = 0, bad = 0, kfs = [], relocFor = 0 // ultima pose validada, cuadros malos seguidos, vistas guardadas
+let trasBrusco = false // buscando la mesa en las vistas guardadas despues de un tiron (el plato no se muestra)
 // error del sensor de orientacion medido por la imagen. En celulares sin giroscopio (solo acelerometro + brujula) la brujula se
 // desvia varios grados (mas cerca de metal) y casi no cambia de un cuadro al otro: se arrastra en vez de volver a cero
 let qb = [0, 0, 0, 1], qvPrev = null, flowPrev = [0, 0]
@@ -271,6 +272,10 @@ onmessage = ({data: m}) => {
   // prevista lo cubren). Solo una pausa larga (la pagina en segundo plano) invalida lo que se sabia de la imagen anterior
   const dt = lastT ? (t - lastT) / 1000 : 0
   if (dt > 1.5) lose()
+  // tras un tiron (fritada-ar.html, bruscoHasta) los puntos viejos ya no estan donde se los dejo, y un mapa nuevo armado desde el
+  // sensor sacudido quedaba ladeado o corrido para siempre: se busca la mesa en las vistas guardadas y el plato no se muestra hasta
+  // encontrarla (o hasta rendirse, ~60 cuadros, y quedarse con el mapa nuevo)
+  if (m.brusco) { lose(); flowPrev = [0, 0]; if (kfs.length) { relocFor = 60; trasBrusco = true } }
   lastT = t
   let qc = [0, 0, 0, 1], valid = false, reloc = false, flow = 0
   if (pts.length) {
@@ -303,6 +308,7 @@ onmessage = ({data: m}) => {
   const t2 = performance.now(); st.pose = t2 - t1 - (st.lk || 0)
   // recien perdida la mesa: se busca en las vistas guardadas, por si el celular se movio mientras no se la veia
   if (relocFor > 0 && relocFor-- % 3 === 0) { const r = relocalize(qF, t); if (r) { qc = r; valid = reloc = true; relocFor = 0 } }
+  if (relocFor <= 0) trasBrusco = false
   const t3 = performance.now(); st.reloc = t3 - t2
   let qv = qmul(qc, qF) // orientacion corregida de este cuadro
   if (valid) { qv = aPlomo(qv, m.q, t, dt); cOk = c.slice(); tOk = t; qb = soloGiro(qmul(qv, qinv(m.q))); qvPrev = qv }
@@ -311,7 +317,8 @@ onmessage = ({data: m}) => {
   const t4 = performance.now(); st.kf = t4 - t3
   // puntos nuevos en las zonas de la imagen que se quedaron sin puntos, solo desde una pose validada (o la ultima buena si no
   // queda ninguno); buscar esquinas recorre toda la imagen, por eso solo cada 3 cuadros salvo que queden muy pocos
-  if ((valid || !pts.length) && pts.length < maxp * 0.6 && (pts.length < 15 || frameNo % 3 === 0)) {
+  // sin puntos, el mapa nuevo sale de la orientacion del sensor: no mientras la mano lo sacude (m.calma), saldria ladeado
+  if ((valid || (!pts.length && m.calma !== false)) && pts.length < maxp * 0.6 && (pts.length < 15 || frameNo % 3 === 0)) {
     const fromEmpty = !pts.length
     thr = pts.length < maxp * 0.4 ? Math.max(4, thr - 1) : Math.min(20, thr + 1) // mesa lisa: se aceptan esquinas mas suaves
     jsfeat.fast_corners.set_threshold(thr)
@@ -324,7 +331,7 @@ onmessage = ({data: m}) => {
       const s = -c[1] / d[1], P = [c[0] + d[0] * s, 0, c[2] + d[2] * s]
       if (s < 2) pts.push({x: k.x, y: k.y, b, d, P}) // mas lejos suele ser el piso o la pared
     }
-    if (fromEmpty && pts.length && lost && kfs.length) { relocFor = 30; lost = false } // la mesa volvio a verse tras perderla
+    if (fromEmpty && pts.length && lost && kfs.length) { relocFor = Math.max(relocFor, 30); lost = false } // la mesa volvio a verse tras perderla
   }
   st.seed = performance.now() - t4
   ;[prevPyr, currPyr] = [currPyr, prevPyr]
@@ -333,7 +340,7 @@ onmessage = ({data: m}) => {
   msAvg = msAvg ? msAvg * 0.9 + ms * 0.1 : ms
   if (frameNo % 10 === 0) maxp = msAvg > 20 ? Math.max(30, maxp - 5) : msAvg < 10 ? Math.min(80, maxp + 5) : maxp
   const state = valid ? 'seguimiento' : bad ? 'degradado' : relocFor > 0 ? 'relocalizando' : 'perdido'
-  postMessage({id, tracking: valid, reloc, state, t, dt, flow, c, qc: qb, qv, n: pts.length, kf: kfs.length, ms, st, maxp,
+  postMessage({id, tracking: valid, reloc, state, t, dt, flow, c, qc: qb, qv, n: pts.length, kf: kfs.length, ms, st, maxp, buscando: trasBrusco,
     // ?debug: el inicio de la fila 3 del cuadro (las pruebas automaticas leen ahi el numero de cuadro)
     ...(m.debug && {strip: Array.from(prevPyr.data[0].data.subarray(3 * w, 3 * w + 60))})})
 }

@@ -157,11 +157,18 @@ addEventListener('devicemotion', (e) => {
 // movimientos MUY bruscos (prueba 01-11): sin giroscopio la inclinacion sale del acelerometro, que no distingue la gravedad del
 // empujon de la mano; el plato se despegaba de la mesa, se ladeaba y quedaba asi. Mientras dure (y 0.6 s despues, lo que tarda
 // el sensor en asentarse) no se sigue: el plato queda en su ultima pose buena y el seguidor no aprende nada de esos cuadros
-let bruscoHasta = 0
+// (prueba 02-11) Congelar la pose dejaba el plato pegado a la pantalla mientras la camara bajaba al piso: mientras dure no se
+// muestra, y al volver el seguidor busca la mesa en sus vistas guardadas (tiron) antes de mostrarlo otra vez. Despues de una
+// sacudida mas suave (agitado) el sensor tambien se ladea: no se arma un mapa nuevo de la mesa hasta que se calme
+let bruscoHasta = 0, agitadoHasta = 0, tiron = false
 addEventListener('devicemotion', (e) => {
   const a = e.accelerationIncludingGravity
-  if (!hasGyro && a && a.x != null && Math.abs(Math.hypot(a.x, a.y, a.z) - 9.81) > 4) bruscoHasta = performance.now() + 600
+  if (hasGyro || !a || a.x == null) return
+  const g = Math.abs(Math.hypot(a.x, a.y, a.z) - 9.81)
+  if (g > 4) { bruscoHasta = performance.now() + 600; tiron = true }
+  if (g > 2.5) agitadoHasta = performance.now() + 250
 })
+const mostrar = (v) => { if (placed && plate.visible !== v) { plate.visible = shadow.visible = v; shadowDirty() } }
 const rateBetween = (t0, t1) => { let s = 0, n = 0; for (const [t, v] of rates) if (t > t0 && t <= t1) { s += v; n++ } return n ? s / n : 0 }
 // iOS exige un permiso tras un toque; Chrome Android tambien expone requestPermission, por eso se escucha siempre
 addEventListener('touchend', () => {
@@ -181,9 +188,10 @@ const retire = [] // cuadros ya reemplazados en pantalla: se liberan despues del
 const drop = (f) => { f.full.close(); f.small?.close() }
 const send = (f) => {
   if (!gotSensor) { f.small.close(); f.small = null; return present(f, null) } // sin sensor no hay seguimiento: se muestra la camara igual
-  if (performance.now() < bruscoHasta) { f.small.close(); f.small = null; return present(f, null) } // bloqueado: ver bruscoHasta
+  if (performance.now() < bruscoHasta) { mostrar(false); f.small.close(); f.small = null; return present(f, null) } // bloqueado: ver bruscoHasta
   active = f; f.sent = performance.now()
-  tracker.postMessage({id: f.id, bmp: f.small, t: f.t, q: sensorAt(f.t, tmp).toArray(), gyro: hasGyro, debug: DEBUG}, [f.small]); f.small = null
+  tracker.postMessage({id: f.id, bmp: f.small, t: f.t, q: sensorAt(f.t, tmp).toArray(), gyro: hasGyro, debug: DEBUG,
+    brusco: tiron, calma: performance.now() >= agitadoHasta}, [f.small]); f.small = null; tiron = false
 }
 const onFrame = (now, meta) => {
   if (cam.requestVideoFrameCallback) cam.requestVideoFrameCallback(onFrame); else requestAnimationFrame(pollFrame)
@@ -237,7 +245,7 @@ const present = (f, m) => {
   if (shown) retire.push(shown.full)
   shown = f; showFrame(f.full)
   if (!m) return
-  lastM = m; sensorSince ||= performance.now()
+  lastM = m; sensorSince ||= performance.now(); mostrar(!m.buscando)
   const dt = prevT ? Math.min(0.5, Math.max(0.001, (f.t - prevT) / 1000)) : 0.033; prevT = f.t
   if (m.tracking) {
     cVis.fromArray(m.c); qVis.fromArray(m.qv)
