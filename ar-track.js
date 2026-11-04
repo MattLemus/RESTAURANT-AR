@@ -1,4 +1,4 @@
-// Seguimiento de la mesa para fritada-ar.html (lo que Snapchat llama "Surface tracking"), en un hilo aparte para que dibujar
+// Seguimiento de la mesa para ar.html (lo que Snapchat llama "Surface tracking"), en un hilo aparte para que dibujar
 // el plato no se trabe. Puntos con textura de la mesa (veta, cables, bordes) se siguen cuadro a cuadro; cada punto tiene su lugar
 // fijo en la mesa, y de donde se ven en el cuadro salen la posicion del celular y una correccion a la orientacion del sensor.
 // Recibe: el cuadro reducido + la orientacion del sensor cuando se tomo. Devuelve: la pose de ESE cuadro, que la pagina dibuja
@@ -272,7 +272,7 @@ onmessage = ({data: m}) => {
   // prevista lo cubren). Solo una pausa larga (la pagina en segundo plano) invalida lo que se sabia de la imagen anterior
   const dt = lastT ? (t - lastT) / 1000 : 0
   if (dt > 1.5) lose()
-  // tras un tiron (fritada-ar.html, bruscoHasta) los puntos viejos ya no estan donde se los dejo, y un mapa nuevo armado desde el
+  // tras un tiron (ar.html, bruscoHasta) los puntos viejos ya no estan donde se los dejo, y un mapa nuevo armado desde el
   // sensor sacudido quedaba ladeado o corrido para siempre: se busca la mesa en las vistas guardadas y el plato no se muestra hasta
   // encontrarla (o hasta rendirse, ~60 cuadros, y quedarse con el mapa nuevo)
   if (m.brusco) { lose(); flowPrev = [0, 0]; if (kfs.length) { relocFor = 60; trasBrusco = true } }

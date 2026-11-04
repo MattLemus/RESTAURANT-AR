@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Hamburguesa</title>
+<title>Ribeye</title>
 <script type="module" src="https://unpkg.com/@google/model-viewer@4.0.0/dist/model-viewer.min.js"></script>
 <style>
   body{margin:0;font-family:system-ui,sans-serif}
@@ -14,26 +14,26 @@
 </style>
 </head>
 <body>
-<!-- Cada celular usa lo mejor que soporte: iPhone = Quick Look (ARKit) con fritada.usdz; Android con ARCore = WebXR;
-     el resto = fritada-ar.html (giroscopio, como Snapchat sin ARCore). Scene Viewer queda fuera: se cierra solo en celulares sin ARCore.
+<!-- Cada celular usa lo mejor que soporte: iPhone = Quick Look (ARKit) con ribeye.usdz; Android con ARCore = WebXR;
+     el resto = ar.html (giroscopio, como Snapchat sin ARCore). Scene Viewer queda fuera: se cierra solo en celulares sin ARCore.
      isSessionSupported('immersive-ar') da true en esos celulares, asi que la falla se detecta al intentar abrir el AR.
      iPhone usa el enlace nativo de Apple (#ql), no el de model-viewer: su deteccion fallo en un iPhone con iOS 26 y lo mandaba al giroscopio.
-     fritada.usdz sale de fritada.glb con Blender (glb_to_usdz.py): 27 cm, Y arriba, metros. -->
-<model-viewer src="fritada.glb"
+     ribeye.usdz sale de ribeye.glb con Blender (glb_to_usdz.py): 28 cm, Y arriba, metros. -->
+<model-viewer src="ribeye.glb"
   ar ar-modes="webxr"
   ar-scale="fixed" ar-placement="floor"
   camera-controls tone-mapping="neutral" shadow-intensity="1"
-  alt="Hamburguesa"
+  alt="Ribeye"
   style="width:100%;height:80vh">
   <!-- model-viewer solo lo muestra si el celular puede abrir AR -->
   <button id="ar" class="cta" slot="ar-button">Ver en mi mesa (AR)</button>
 </model-viewer>
 <div style="text-align:center">
-  <a id="slam" class="cta" href="fritada-ar.html">Ver en mi mesa (AR)</a>
+  <a id="slam" class="cta" href="ar.html?glb=ribeye.glb&tint=ffecd8">Ver en mi mesa (AR)</a>
   <!-- Safari abre Quick Look solo si el enlace tiene rel="ar" y una <img> como unico elemento hijo (el texto si se permite).
        shortcut: en navegadores dentro de apps (Instagram, Facebook) Quick Look no existe y solo se abre el archivo; si hace falta, mandarlos al giroscopio -->
   <!-- allowsContentScaling=0: sin pellizco, el plato queda a tamano real. El aviso "View in AR?" lo pone Safari siempre (WebKit), no se puede quitar -->
-  <a id="ql" class="cta" rel="ar" href="fritada.usdz#allowsContentScaling=0&custom=https://mattlemus.github.io/RESTAURANT-AR/banner-fritada.html&customHeight=small&canonicalWebPageURL=https://mattlemus.github.io/RESTAURANT-AR/fritada.html"><img alt="" width="1" height="1" src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==">Ver en mi mesa (AR)</a>
+  <a id="ql" class="cta" rel="ar" href="ribeye.usdz#allowsContentScaling=0&custom=https://mattlemus.github.io/RESTAURANT-AR/banner-ribeye.html&customHeight=small&canonicalWebPageURL=https://mattlemus.github.io/RESTAURANT-AR/ribeye.html"><img alt="" width="1" height="1" src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==">Ver en mi mesa (AR)</a>
   <!-- ARKit tarda en encontrar la mesa con poca luz o moviendo rapido ("Move iPhone to start"); esto lo acorta -->
   <p id="tip">Con buena luz, apunta a la mesa y mueve el celular despacio de lado a lado.</p>
 </div>
@@ -47,7 +47,7 @@
     // relList.supports('ar') es la deteccion que recomienda Apple: falso en navegadores de apps, que solo bajarian el archivo
     if (ql.relList.supports('ar')) ql.click()
   }
-  mv.addEventListener('ar-status', (e) => { if (e.detail.status === 'failed') location.href = 'fritada-ar.html' })
+  mv.addEventListener('ar-status', (e) => { if (e.detail.status === 'failed') location.href = 'ar.html?glb=ribeye.glb&tint=ffecd8' })
   // sin boton de AR nativo (Android sin WebXR, Firefox...): ofrecer la version con giroscopio
   mv.addEventListener('load', () => { if (!ios && !mv.canActivateAR) document.getElementById('slam').style.display = 'inline-block' })
 </script>

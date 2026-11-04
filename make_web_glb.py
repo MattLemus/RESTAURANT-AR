@@ -1,5 +1,5 @@
-# blender -b --factory-startup -P make_web_glb.py -- ../ar/fritada.glb fritada.glb [ancho_cm] [triangulos]
-# fritada.glb para la web a partir del original (ar/fritada.glb, 17 MB): apoyado en la mesa (base en y=0), centrado, 27 cm.
+# blender -b --factory-startup -P make_web_glb.py -- ../Modelos/ribeye.glb ribeye.glb [ancho_cm] [triangulos]
+# El GLB de la web a partir del modelo generado (Modelos/): apoyado en la mesa (base en y=0), centrado y a su ancho real.
 # La textura es un mosaico de trocitos: con la compresion por defecto (Draco 12 bits en UV, JPEG fuerte) se mezclaban
 # trocitos vecinos y el queso/arroz se veia gris y "brilloso" como hielo. Por eso UV a 16 bits y JPEG 95.
 # ancho_cm: ancho real del plato visto desde arriba (los modelos generados vienen de ~1 m). triangulos: maximo, para que
@@ -91,6 +91,30 @@ for o in meshes:
     o.select_set(True)
 bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
 
+# Nivelar: Pixal3D arma el plato con la inclinacion de la camara de la foto (un plato vino a 41 grados).
+# El eje con mas area de caras alineada (arriba y abajo del plato, la mesa del plato) es la vertical del plato.
+import numpy as np
+M = np.zeros((3, 3))
+for o in meshes:
+    for p in o.data.polygons:
+        n = np.array(p.normal)
+        M += p.area * np.outer(n, n)
+up = Vector(np.linalg.eigh(M)[1][:, 2])
+if up.z < 0:
+    up = -up
+ang = up.angle(Vector((0, 0, 1)))
+# shortcut: si el eje sale a mas de 60 grados se asume que no es el plato (plato muy chico o comida alta) y no se toca
+if 0.5 < np.degrees(ang) < 60:
+    R = up.rotation_difference(Vector((0, 0, 1))).to_matrix().to_4x4()
+    for o in meshes:
+        o.data.transform(R)
+print('NIVELAR', round(float(np.degrees(ang)), 1), 'grados')
+# girar sobre la mesa para que el lado largo del plato quede en X: asi ancho_cm mide el plato, no su diagonal
+xy = np.array([(v.co.x, v.co.y) for o in meshes for v in o.data.vertices])
+ex = np.linalg.eigh(np.cov(xy.T))[1][:, 1]
+for o in meshes:
+    o.data.transform(Matrix.Rotation(-np.arctan2(ex[1], ex[0]), 4, 'Z'))
+
 pts = [v.co for o in meshes for v in o.data.vertices]
 lo = Vector((min(p.x for p in pts), min(p.y for p in pts), min(p.z for p in pts)))
 hi = Vector((max(p.x for p in pts), max(p.y for p in pts), max(p.z for p in pts)))
@@ -116,8 +140,34 @@ for img in bpy.data.images:
 bpy.ops.export_scene.gltf(
     filepath=dst, export_format='GLB',
     export_image_format='JPEG', export_image_quality=95,  # export_jpeg_quality se ignora: salia en calidad 75
-    export_draco_mesh_compression_enable=True,
+    # nivel 10 solo cambia como se empaqueta: misma cuantizacion, la malla decodificada es identica bit a bit (-10%)
+    export_draco_mesh_compression_enable=True, export_draco_mesh_compression_level=10,
     export_draco_position_quantization=14, export_draco_normal_quantization=10, export_draco_texcoord_quantization=16,
     export_cameras=False, export_lights=False,
 )
-print('EXPORTED', dst)
+
+# Texturas sin perdida: jpegtran reescribe cada JPEG con Huffman optimizado y progresivo, mismos pixeles (-9%).
+# Despues se rearma el binario del GLB con los nuevos largos.
+import json, os, struct, subprocess
+JPEGTRAN = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'tools', 'jpegtran.exe')
+f = open(dst, 'rb').read()
+n = struct.unpack('<I', f[12:16])[0]
+j = json.loads(f[20:20 + n])
+binc = f[28 + n:28 + n + struct.unpack('<I', f[20 + n:24 + n])[0]]
+jpgs = {im['bufferView'] for im in j.get('images', []) if im.get('mimeType') == 'image/jpeg'}
+out = b''
+for i, bv in enumerate(j['bufferViews']):
+    data = binc[bv.get('byteOffset', 0):bv.get('byteOffset', 0) + bv['byteLength']]
+    if i in jpgs:
+        data = subprocess.run([JPEGTRAN, '-copy', 'none', '-optimize', '-progressive'], input=data, capture_output=True,
+                              check=True).stdout
+    out += b'\0' * (-len(out) % 4)
+    bv['byteOffset'], bv['byteLength'] = len(out), len(data)
+    out += data
+out += b'\0' * (-len(out) % 4)
+j['buffers'][0]['byteLength'] = len(out)
+js = json.dumps(j, separators=(',', ':')).encode()
+js += b' ' * (-len(js) % 4)
+open(dst, 'wb').write(struct.pack('<4sII', b'glTF', 2, 28 + len(js) + len(out)) + struct.pack('<I4s', len(js), b'JSON') + js
+                      + struct.pack('<I4s', len(out), b'BIN\0') + out)
+print('EXPORTED', dst, len(f), '->', os.path.getsize(dst))

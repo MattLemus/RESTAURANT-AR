@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<title>Fritada AR</title>
+<title>Cortefuego AR</title>
 <style>
   html,body{margin:0;height:100%;overflow:hidden;background:#000;font-family:system-ui,sans-serif;-webkit-tap-highlight-color:transparent}
   #cam,#gl{position:fixed;inset:0;width:100%;height:100%}
@@ -11,9 +11,8 @@
   .ui{position:fixed;display:flex;flex-direction:column;align-items:center;gap:6px;color:#fff;font-size:14px;text-decoration:none}
   .btn{width:52px;height:52px;border-radius:50%;background:rgba(30,30,30,.82);display:grid;place-items:center;border:0;padding:0}
   .btn svg{width:26px;height:26px;fill:none;stroke:#fff;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
-  #close{top:16px;right:16px} #three{top:84px;right:16px}
-  #rot{right:16px;bottom:18px}
-  #msg{position:fixed;left:12px;right:12px;top:16px;padding:10px 14px;border-radius:12px;background:rgba(0,0,0,.6);color:#fff;font-size:15px;text-align:center;pointer-events:none;transition:opacity .6s}
+  #close{top:16px;right:16px}
+  #msg{position:fixed;left:50%;bottom:32px;transform:translateX(-50%);max-width:calc(100% - 32px);padding:10px 18px;border-radius:999px;background:rgba(20,20,20,.55);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);color:#fff;font-size:15px;font-weight:500;white-space:nowrap;pointer-events:none;transition:opacity .6s}
   #dbg{position:fixed;left:8px;bottom:8px;right:84px;padding:4px 8px;border-radius:8px;background:rgba(0,0,0,.55);color:#fff;font:11px/1.35 monospace;pointer-events:none}
   /* aro donde se toca, como el de Snapchat */
   .ring{position:fixed;width:64px;height:64px;margin:-32px 0 0 -32px;border:3px solid #fff;border-radius:50%;background:rgba(255,255,255,.3);pointer-events:none;animation:ring .5s ease-out forwards}
@@ -30,10 +29,8 @@
 <!-- el video solo entrega los cuadros; lo que se ve es el lienzo, que dibuja cada cuadro junto con el plato -->
 <video id="cam" autoplay playsinline muted></video>
 <canvas id="gl"></canvas>
-<a id="close" class="ui btn" href="fritada.html" aria-label="Cerrar"><svg viewBox="0 0 24 24"><path d="M5 5l14 14M19 5L5 19"/></svg></a>
-<a id="three" class="ui btn" href="fritada.html" aria-label="Ver en 3D"><svg viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9zM12 12l8-4.5M12 12v9M12 12L4 7.5"/></svg></a>
-<button id="rot" class="ui" style="background:none;border:0"><span class="btn"><svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.5-5.8M20 4v5h-5"/></svg></span>Rotar</button>
-<div id="msg">Apunta a la mesa y acércate o rodea el plato. Toca la mesa para moverlo; con dos dedos cambias su tamaño y lo giras.</div>
+<a id="close" class="ui btn" href="menu.html" aria-label="Cerrar"><svg viewBox="0 0 24 24"><path d="M5 5l14 14M19 5L5 19"/></svg></a>
+<div id="msg">Apunta a la mesa</div>
 <div id="dbg" hidden></div>
 <script type="module">
 // AR como el de Snapchat en celulares sin ARCore: camara + plato 3D. El sensor de orientacion dice hacia donde mira el celular
@@ -177,11 +174,11 @@ addEventListener('touchend', () => {
 }, {once: true})
 setTimeout(() => { if (!gotSensor) msg.textContent = 'Este celular no entrega datos del sensor de movimiento.' }, 2500)
 
-// --- cuadros: captura -> seguidor (fritada-track.js, en otro hilo) -> dibujo con su pose ---
+// --- cuadros: captura -> seguidor (ar-track.js, en otro hilo) -> dibujo con su pose ---
 // Un cuadro en calculo y como mucho uno esperando (el mas nuevo reemplaza al que esperaba): nunca se forma una cola de cuadros
 // viejos (LOGICA_FLUIDEZ, seccion 4). Cada cuadro se toma en dos tamanos a la vez: completo para mostrarlo, chico para seguir puntos
 const TW = 320 // px del lado largo del cuadro chico: alcanza para la veta de la mesa y es rapido en celulares modestos
-const tracker = new Worker('fritada-track.js')
+const tracker = new Worker('ar-track.js')
 tracker.postMessage({h: CAM_H, fov: LONG_FOV})
 let capturing = false, active = null, pending = null, nextId = 0, shown = null, capMs = 0
 const retire = [] // cuadros ya reemplazados en pantalla: se liberan despues del dibujo que sube el nuevo
@@ -303,9 +300,10 @@ const draco = new DRACOLoader()
 draco.setDecoderPath('https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/libs/draco/gltf/')
 const loader = new GLTFLoader(); loader.setDRACOLoader(draco)
 let plateReady = false
-loader.load(q.get('glb') || 'fritada.glb', (g) => { // ?glb=: un plato escaneado (escanear.html)
+if (!q.get('glb')) location.replace('menu.html')  // cada plato llega desde el menu con ?glb=
+loader.load(q.get('glb'), (g) => {
   plate = g.scene; scene.add(plate)
-  // la sombra mide como el plato que se cargo (0.32 m era para la fritada de 27 cm), sirve para cualquier plato
+  // la sombra mide como el plato que se cargo (0.32 m fijo servia solo para un plato de 27 cm), sirve para cualquier plato
   const sz = new THREE.Box3().setFromObject(plate).getSize(new THREE.Vector3()), w = Math.max(sz.x, sz.z) * 1.19
   shadow.geometry.dispose(); shadow.geometry = new THREE.PlaneGeometry(w, w)
   // nitidez de las texturas al mirar el plato en angulo
@@ -357,9 +355,11 @@ addEventListener('touchend', (e) => {
   if (tap && !grab && !e.touches.length && performance.now() - tap.t < 400) { const h = hitGround(tap.x, tap.y); if (h) { dropAt(h.point); ripple(tap.x, tap.y) } }
   tap = null
 })
-// pantalla completa al primer toque: sin la barra de Chrome, como la camara de Snapchat
-addEventListener('touchend', () => document.documentElement.requestFullscreen?.().catch(() => {}), {once: true})
-$('rot').onclick = () => { if (placed) { plate.rotation.y += Math.PI / 4; shadowDirty() } }
+// pantalla completa al primer toque: sin la barra de Chrome, como la camara de Snapchat. Abierta desde el menu ya llega en
+// pantalla completa (el menu la pide con su toque y abre esta pagina dentro), asi que ahi no se pide de nuevo: trababa al mover el plato
+if (top === self) addEventListener('touchend', () => document.documentElement.requestFullscreen?.().catch(() => {}), {once: true})
+// la X dentro del menu cierra la capa del AR
+$('close').onclick = (e) => { if (top !== self) { e.preventDefault(); parent.postMessage('cerrar-ar', '*') } }
 
 // dibujo: solo cuando hay algo nuevo (un cuadro de la camara con su pose, un gesto o la caida del plato); repintar lo mismo
 // 60 veces por segundo le quitaba tiempo al seguidor
@@ -377,7 +377,7 @@ renderer.setAnimationLoop(() => {
   // que seguir, al segundo y medio con la orientacion del sensor (como antes de seguir puntos)
   if (!placed && plateReady && (hasPose || (sensorSince && performance.now() - sensorSince > 1500))) {
     const h = hitGround(innerWidth / 2, innerHeight / 2)
-    if (h) { dropAt(h.point); setScale(1); plate.visible = shadow.visible = placed = true; setTimeout(() => (msg.style.opacity = 0), 6000) }
+    if (h) { dropAt(h.point); setScale(1); plate.visible = shadow.visible = placed = true; msg.textContent = 'Toca la mesa para moverlo'; setTimeout(() => (msg.style.opacity = 0), 3500) }
   }
   if (!dirty) return
   dirty = false

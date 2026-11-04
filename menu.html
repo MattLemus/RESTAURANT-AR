@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cortefuego</title>
+<style>
+  :root{--bg:#141110;--card:#1f1a17;--txt:#f3ece6;--sub:#a89a8f;--fuego:#e8622c}
+  body{margin:0;background:var(--bg);color:var(--txt);font-family:system-ui,sans-serif}
+  header{text-align:center;padding:28px 16px 8px}
+  h1{margin:0;font-size:34px;letter-spacing:2px}
+  h1 span{color:var(--fuego)}
+  header p{margin:6px 0 0;color:var(--sub)}
+  h2{margin:24px 16px 8px;font-size:15px;text-transform:uppercase;letter-spacing:2px;color:var(--fuego)}
+  ul{list-style:none;margin:0;padding:0 16px;display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(280px,1fr))}
+  li{background:var(--card);border-radius:14px;padding:14px;display:flex;gap:12px;align-items:center}
+  .ico{font-size:34px;width:48px;text-align:center}
+  .info{flex:1}
+  .info b{display:block}
+  .info small{color:var(--sub)}
+  .precio{font-weight:700}
+  .ar{display:inline-block;margin-top:8px;padding:6px 12px;border-radius:16px;background:var(--fuego);color:#fff;text-decoration:none;font-size:14px}
+  .ar.pronto{background:#3a322d;color:var(--sub)}
+  footer{text-align:center;color:var(--sub);font-size:13px;padding:28px 16px}
+</style>
+</head>
+<body>
+<header>
+  <h1>CORTE<span>FUEGO</span></h1>
+  <p>Mira tu plato en tu mesa antes de pedirlo</p>
+</header>
+<main id="menu"></main>
+<footer>Toca "Ver en mi mesa" y apunta el celular a la mesa</footer>
+<script>
+  // ar: la página del plato en 3D; null = todavía sin modelo (se muestra "3D pronto")
+  const secciones = {
+    'Cortes': [
+      ['🥩', 'Ribeye', '350 g en salsa roja con papas', 24, 'ribeye.html'],
+      ['🥩', 'Picanha', '300 g con chimichurri', 22, 'picanha.html'],
+    ],
+  }
+  // directo al AR, sin la página intermedia del visor: iPhone abre Quick Look solo (ribeye.html, picanha.html); Android va a la cámara.
+  // shortcut: los Android con ARCore también van a la cámara y no a WebXR; si hace falta, mandarlos a la página del plato
+  const ios = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+  document.getElementById('menu').innerHTML = Object.entries(secciones).map(([sec, platos]) =>
+    `<h2>${sec}</h2><ul>` + platos.map(([ico, nombre, desc, precio, ar]) => `
+      <li><div class="ico">${ico}</div>
+        <div class="info"><b>${nombre}</b><small>${desc}</small><br>
+          ${ar ? `<a class="ar" href="${ios ? ar : 'ar.html?glb=' + ar.replace('.html', '.glb') + '&tint=ffecd8'}">Ver en mi mesa (AR)</a>` : '<span class="ar pronto">3D pronto</span>'}
+        </div>
+        <div class="precio">$${precio}</div></li>`).join('') + '</ul>').join('')
+  // Android: Chrome solo da pantalla completa con un toque, y se pierde al cambiar de pagina. Por eso el toque del menu la pide
+  // y el AR se abre dentro, en una capa: llega ya en pantalla completa y no salta al primer toque en la mesa
+  if (!ios) addEventListener('click', (e) => {
+    const a = e.target.closest('a.ar'); if (!a) return
+    e.preventDefault()
+    document.documentElement.requestFullscreen?.().catch(() => {})
+    const f = document.body.appendChild(document.createElement('iframe'))
+    f.allow = 'camera; fullscreen; accelerometer; gyroscope; magnetometer'
+    f.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;border:0;z-index:9;background:#000'
+    f.src = a.href
+  })
+  addEventListener('message', (e) => {
+    if (e.data !== 'cerrar-ar') return
+    document.querySelector('iframe')?.remove()
+    document.fullscreenElement && document.exitFullscreen()
+  })
+</script>
+</body>
+</html>
