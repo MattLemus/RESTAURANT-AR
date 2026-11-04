@@ -47,53 +47,17 @@ bpy.ops.wm.usd_export(
     accessibility_label=os.path.splitext(os.path.basename(dst))[0].capitalize(),  # lo que lee VoiceOver: Ribeye
 )
 
-# Mismo USDZ, mas liviano y sin cambiar un solo valor (-35/-41%): Blender escribe normales y UV por esquina de triangulo
-# (600k veces). Si todas las esquinas de cada punto valen lo mismo bit a bit, se guardan una vez por punto ('vertex').
-# Texturas: jpegtran con Huffman optimizado, mismos pixeles; JPEG normal (no progresivo): no se confirmo que Quick Look lo lea.
+# La malla queda como la escribe Blender (normales por esquina, igual que los modelos de ejemplo de Apple): pasarla a una
+# vez por punto bajaba 35-41% con los mismos valores, pero no se pudo probar en un iPhone y el usuario prefiere calidad a peso.
+# Texturas: el GLB las trae en JPEG progresivo (Android) y Blender las copia tal cual; no se confirmo que Quick Look lea
+# progresivo, asi que jpegtran las pasa a JPEG normal (baseline), mismos pixeles.
 import os, subprocess, tempfile, zipfile
-import numpy as np
-from pxr import Usd, UsdGeom, Sdf, Vt
+from pxr import Sdf
 JPEGTRAN = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'tools', 'jpegtran.exe')
 tmp = tempfile.mkdtemp()
 with zipfile.ZipFile(dst) as z:
     names = z.namelist()
     z.extractall(tmp)
-root = os.path.join(tmp, names[0])  # el primer archivo del usdz es la escena
-st = Usd.Stage.Open(root)
-for prim in st.Traverse():
-    if prim.GetTypeName() != 'Mesh':
-        continue
-    mesh = UsdGeom.Mesh(prim)
-    fvi = np.array(mesh.GetFaceVertexIndicesAttr().Get())
-    first = np.full(len(mesh.GetPointsAttr().Get()), -1)
-    first[fvi[::-1]] = np.arange(len(fvi))[::-1]  # primera esquina de cada punto
-
-    def por_punto(vals):
-        vals = np.asarray(vals, dtype=np.float32)
-        if len(vals) != len(fvi) or (first < 0).any():
-            return None
-        ref = vals[first[fvi]]
-        return ref[first] if np.array_equal(ref.view(np.uint32), vals.view(np.uint32)) else None
-
-    if mesh.GetNormalsInterpolation() == UsdGeom.Tokens.faceVarying:
-        v = por_punto(mesh.GetNormalsAttr().Get())
-        if v is not None:
-            mesh.GetNormalsAttr().Set(Vt.Vec3fArray.FromNumpy(v))
-            mesh.SetNormalsInterpolation(UsdGeom.Tokens.vertex)
-    for pv in UsdGeom.PrimvarsAPI(prim).GetPrimvars():
-        if pv.GetInterpolation() != UsdGeom.Tokens.faceVarying or pv.GetTypeName() != Sdf.ValueTypeNames.TexCoord2fArray:
-            continue
-        v = por_punto(pv.ComputeFlattened())
-        if v is not None:
-            pv.Set(Vt.Vec2fArray.FromNumpy(v))
-            pv.SetInterpolation(UsdGeom.Tokens.vertex)
-            if pv.GetIndicesAttr():
-                prim.RemoveProperty(pv.GetIndicesAttr().GetName())
-    print('COMPACTAR', prim.GetPath(), 'normales', mesh.GetNormalsInterpolation())
-# Save() en un .usdc agrega al final y deja los datos viejos dentro: se escribe un archivo nuevo
-st.GetRootLayer().Export(root + '.nuevo.usdc')
-del st
-os.replace(root + '.nuevo.usdc', root)
 w = Sdf.ZipFileWriter.CreateNew(dst + '.tmp')  # sin comprimir y alineado a 64 bytes, como pide USDZ
 for name in names:
     f = os.path.join(tmp, name)
