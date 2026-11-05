@@ -14,19 +14,14 @@
 </style>
 </head>
 <body>
-<!-- Cada celular usa lo mejor que soporte: iPhone = Quick Look (ARKit) con churrasco.usdz; Android con ARCore = WebXR;
-     el resto = ar.html (giroscopio, como Snapchat sin ARCore). Scene Viewer queda fuera: se cierra solo en celulares sin ARCore.
-     isSessionSupported('immersive-ar') da true en esos celulares, asi que la falla se detecta al intentar abrir el AR.
+<!-- Cada celular usa lo mejor que soporte: iPhone = Quick Look (ARKit) con churrasco.usdz; Android con ARCore = Scene Viewer (ARCore);
+     el resto = ar.html (giroscopio, como Snapchat sin ARCore). WebXR en Chrome fallaba en celulares con ARCore y caia al giroscopio.
      iPhone usa el enlace nativo de Apple (#ql), no el de model-viewer: su deteccion fallo en un iPhone con iOS 26 y lo mandaba al giroscopio.
      churrasco.usdz sale de churrasco.glb con Blender (glb_to_usdz.py): 25 cm, Y arriba, metros. -->
 <model-viewer src="churrasco.glb"
-  ar ar-modes="webxr"
-  ar-scale="fixed" ar-placement="floor"
   camera-controls tone-mapping="neutral" shadow-intensity="1"
   alt="Churrasco"
   style="width:100%;height:80vh">
-  <!-- model-viewer solo lo muestra si el celular puede abrir AR -->
-  <button id="ar" class="cta" slot="ar-button">Ver en mi mesa (AR)</button>
 </model-viewer>
 <div style="text-align:center">
   <a id="slam" class="cta" href="ar.html?glb=churrasco.glb&tint=ffecd8">Ver en mi mesa (AR)</a>
@@ -38,7 +33,6 @@
   <p id="tip">Con buena luz, apunta a la mesa y mueve el celular despacio de lado a lado.</p>
 </div>
 <script>
-  const mv = document.querySelector('model-viewer')
   const ios = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
   const ql = document.getElementById('ql')
   if (ios) {
@@ -47,9 +41,19 @@
     // relList.supports('ar') es la deteccion que recomienda Apple: falso en navegadores de apps, que solo bajarian el archivo
     if (ql.relList.supports('ar')) ql.click()
   }
-  mv.addEventListener('ar-status', (e) => { if (e.detail.status === 'failed') location.href = 'ar.html?glb=churrasco.glb&tint=ffecd8' })
-  // sin boton de AR nativo (Android sin WebXR, Firefox...): ofrecer la version con giroscopio
-  mv.addEventListener('load', () => { if (!ios && !mv.canActivateAR) document.getElementById('slam').style.display = 'inline-block' })
+  const slam = document.getElementById('slam')
+  if (!ios) {
+    slam.style.display = 'inline-block'
+    if (/Android/i.test(navigator.userAgent)) {
+      // Scene Viewer dentro de Google Play Services for AR: si el celular no tiene ARCore (ej. Honor), Android no encuentra
+      // el paquete y abre browser_fallback_url (ar.html) en vez de cerrarse como hacia el Scene Viewer de la app de Google
+      const abs = (u) => new URL(u, location.href).href
+      slam.href = 'intent://arvr.google.com/scene-viewer/1.0?file=' + encodeURIComponent(abs('churrasco.glb')) +
+        '&mode=ar_only&resizable=false&title=' + encodeURIComponent(document.title) +
+        '#Intent;scheme=https;package=com.google.ar.core;action=android.intent.action.VIEW;S.browser_fallback_url=' +
+        encodeURIComponent(abs(slam.getAttribute('href'))) + ';end;'
+    }
+  }
 </script>
 </body>
 </html>
