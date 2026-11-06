@@ -104,7 +104,8 @@ if up.z < 0:
     up = -up
 ang = up.angle(Vector((0, 0, 1)))
 # shortcut: si el eje sale a mas de 60 grados se asume que no es el plato (plato muy chico o comida alta) y no se toca
-if 0.5 < np.degrees(ang) < 60:
+# 'sin_nivelar': el plato ya viene derecho (captura/limpiar.py lo nivela por el borde)
+if 0.5 < np.degrees(ang) < 60 and 'sin_nivelar' not in a:
     R = up.rotation_difference(Vector((0, 0, 1))).to_matrix().to_4x4()
     for o in meshes:
         o.data.transform(R)
