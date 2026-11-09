@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<title>Escanear plato</title>
+<style>
+  :root { --verde: #22c55e; --gris: rgba(255,255,255,.55); --panel: rgba(18,18,18,.92); }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: #000; color: #fff; overflow: hidden;
+    font-family: system-ui, -apple-system, Roboto, sans-serif; -webkit-user-select: none; user-select: none; }
+  body { display: flex; flex-direction: column; }
+  header { padding: max(10px, env(safe-area-inset-top)) 16px 8px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  header h1 { font-size: 18px; margin: 0 auto 0 0; font-weight: 700; }
+  .chip { font-size: 12px; padding: 4px 9px; border-radius: 99px; background: rgba(255,255,255,.12); color: var(--gris); }
+  .chip.ok { background: rgba(34,197,94,.18); color: #86efac; }
+  #vista { position: relative; margin: 0 auto; width: min(100vw, calc((100vh - 230px) * .75)); aspect-ratio: 3 / 4; overflow: hidden; border-radius: 14px; background: #111; }
+  video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  #aro { transition: stroke .3s; }
+  #flash { position: absolute; inset: 0; background: #fff; opacity: 0; pointer-events: none; transition: opacity .25s; }
+  #cuenta { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; font-size: 110px; font-weight: 800; text-shadow: 0 4px 24px rgba(0,0,0,.6); }
+  footer { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 10px 16px max(14px, env(safe-area-inset-bottom)); text-align: center; }
+  #msg { font-size: 17px; line-height: 1.35; max-width: 420px; min-height: 2.7em; }
+  #contador { font-size: 13px; color: var(--gris); font-variant-numeric: tabular-nums; }
+  #boton { width: 78px; height: 78px; border-radius: 50%; border: 5px solid #fff; background: var(--verde); color: #fff; font-size: 13px; font-weight: 700; cursor: pointer; }
+  #boton.parar { background: #ef4444; }
+  #boton:disabled { opacity: .4; }
+  #otro { display: none; padding: 12px 22px; border-radius: 12px; border: 0; background: #fff; color: #000; font-size: 15px; font-weight: 700; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Escanear plato</h1>
+  <span class="chip" id="chipEnfoque">Enfoque</span>
+  <span class="chip" id="chipBrillo">Brillo</span>
+  <span class="chip" id="chipDestino">…</span>
+</header>
+<div id="vista">
+  <video id="video" playsinline muted autoplay></video>
+  <svg viewBox="0 0 300 400" preserveAspectRatio="none" aria-hidden="true">
+    <defs><mask id="hueco"><rect width="300" height="400" fill="#fff"/><ellipse cx="150" cy="200" rx="130" ry="100" fill="#000"/></mask></defs>
+    <rect width="300" height="400" fill="rgba(0,0,0,.5)" mask="url(#hueco)"/>
+    <ellipse id="aro" cx="150" cy="200" rx="130" ry="100" fill="none" stroke="#fff" stroke-width="2.5" stroke-dasharray="9 6"/>
+    <g id="marcas"></g>
+  </svg>
+  <div id="flash"></div>
+  <div id="cuenta"></div>
+</div>
+<footer>
+  <div id="msg">Abriendo la cámara…</div>
+  <div id="contador"></div>
+  <button id="boton" disabled aria-label="Empezar">Empezar</button>
+  <button id="otro">Escanear otro plato</button>
+</footer>
+<script>
+const TOTAL = 40;          // ~1 vuelta en 1 minuto (cada foto tarda ~1.5 s en el Honor)
+const MIN_MS = 1200;       // separacion minima entre fotos
+const $ = id => document.getElementById(id);
+const msg = t => { $('msg').textContent = t; };
+const dormir = ms => new Promise(r => setTimeout(r, ms));
+let track, captura, enMarcha = false, alPC = false, sesion, fotos = [], enviadas = 0, cola = Promise.resolve();
+
+// 40 marquitas alrededor del ovalo: se pintan de verde con cada foto
+const NS = 'http://www.w3.org/2000/svg';
+for (let i = 0; i < TOTAL; i++) {
+  const a = -Math.PI / 2 + i * 2 * Math.PI / TOTAL, c = Math.cos(a), s = Math.sin(a);
+  const l = document.createElementNS(NS, 'line');
+  l.setAttribute('x1', 150 + 137 * c); l.setAttribute('y1', 200 + 107 * s);
+  l.setAttribute('x2', 150 + 147 * c); l.setAttribute('y2', 200 + 117 * s);
+  l.setAttribute('stroke', 'rgba(255,255,255,.35)'); l.setAttribute('stroke-width', '3'); l.setAttribute('stroke-linecap', 'round');
+  $('marcas').appendChild(l);
+}
+const marcas = [...$('marcas').children];
+
+function chip(id, texto, ok) { $(id).textContent = texto; $(id).classList.toggle('ok', !!ok); }
+
+async function abrirCamara() {
+  try {
+    const st = await navigator.mediaDevices.getUserMedia({ audio: false,
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1440 } } });
+    track = st.getVideoTracks()[0];
+    $('video').srcObject = st;
+    if ('ImageCapture' in window) captura = new ImageCapture(track);
+  } catch (e) {
+    msg('No pude abrir la cámara. Dale permiso de cámara a esta página y recárgala.');
+    return;
+  }
+  // Si la pagina viene de la compu (servidor local), las fotos se mandan directo alla
+  try { alPC = (await fetch('subir/ping', { cache: 'no-store' })).ok; } catch (e) { alPC = false; }
+  chip('chipDestino', alPC ? 'Fotos → compu' : 'Fotos → celular', alPC);
+  msg('Pon el plato dentro del óvalo, bien cerca, y toca Empezar.');
+  $('boton').disabled = false;
+}
+
+// Traba enfoque, brillo y color para que todas las fotos salgan iguales (cada uno por separado: si uno falla, los otros quedan)
+async function trabar() {
+  const caps = track.getCapabilities ? track.getCapabilities() : {}, set = track.getSettings ? track.getSettings() : {};
+  const probar = async (c) => { try { await track.applyConstraints({ advanced: [c] }); return true; } catch (e) { return false; } };
+  let enf = false, bri = false;
+  if (caps.focusMode && caps.focusMode.includes('manual') && set.focusDistance != null) enf = await probar({ focusMode: 'manual', focusDistance: set.focusDistance });
+  if (!enf && caps.focusMode && caps.focusMode.includes('single-shot')) enf = await probar({ focusMode: 'single-shot' });
+  if (caps.exposureMode && caps.exposureMode.includes('manual') && set.exposureTime != null) {
+    const c = { exposureMode: 'manual', exposureTime: set.exposureTime };
+    if (set.iso != null) c.iso = set.iso;
+    bri = await probar(c);
+  }
+  if (!bri && caps.exposureMode && caps.exposureMode.includes('single-shot')) bri = await probar({ exposureMode: 'single-shot' });
+  if (caps.whiteBalanceMode && caps.whiteBalanceMode.includes('manual') && set.colorTemperature) await probar({ whiteBalanceMode: 'manual', colorTemperature: set.colorTemperature });
+  else if (caps.whiteBalanceMode && caps.whiteBalanceMode.includes('single-shot')) await probar({ whiteBalanceMode: 'single-shot' });
+  chip('chipEnfoque', enf ? 'Enfoque fijo ✓' : 'Enfoque auto', enf);
+  chip('chipBrillo', bri ? 'Brillo fijo ✓' : 'Brillo auto', bri);
+}
+
+let ajustesFoto;
+async function sacarFoto() {
+  if (captura) {
+    try {
+      if (ajustesFoto === undefined) {
+        try { const pc = await captura.getPhotoCapabilities(); ajustesFoto = { imageWidth: pc.imageWidth.max, imageHeight: pc.imageHeight.max }; }
+        catch (e) { ajustesFoto = null; }
+      }
+      return await captura.takePhoto(ajustesFoto || undefined);
+    } catch (e) { captura = null; }  // este celular no deja: seguimos con el cuadro del video
+  }
+  const v = $('video'), c = document.createElement('canvas');
+  c.width = v.videoWidth; c.height = v.videoHeight;
+  c.getContext('2d').drawImage(v, 0, 0);
+  return await new Promise(r => c.toBlob(r, 'image/jpeg', 0.95));
+}
+
+function enviar(blob, n) {
+  cola = cola.then(async () => {
+    for (let intento = 0; intento < 3; intento++) {
+      try {
+        const r = await fetch(`subir?s=${sesion}&n=${n}`, { method: 'POST', body: blob });
+        if (r.ok) { enviadas++; return; }
+      } catch (e) {}
+      await dormir(800);
+    }
+    fotos.push({ blob, n });  // no llego a la compu: se guarda en el celular al final
+  });
+}
+
+function estampa() {
+  const d = new Date(), p = x => String(x).padStart(2, '0');
+  return `plato_${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+}
+
+async function empezar() {
+  enMarcha = true; sesion = estampa(); fotos = []; enviadas = 0;
+  $('boton').disabled = true;
+  try { await navigator.wakeLock.request('screen'); } catch (e) {}
+  msg('Trabando enfoque y brillo…');
+  await trabar();
+  $('cuenta').style.display = 'flex';
+  for (const n of [3, 2, 1]) { $('cuenta').textContent = n; await dormir(800); }
+  $('cuenta').style.display = 'none';
+  $('boton').textContent = 'Terminar'; $('boton').classList.add('parar'); $('boton').disabled = false;
+  $('aro').setAttribute('stroke', 'var(--verde)');
+  msg('Da una vuelta completa alrededor del plato, despacio y sin parar. Mantenlo dentro del óvalo.');
+  let n = 0;
+  while (enMarcha && n < TOTAL) {
+    const t0 = performance.now();
+    const blob = await sacarFoto();
+    if (!blob) continue;
+    n++;
+    $('flash').style.opacity = .55; setTimeout(() => { $('flash').style.opacity = 0; }, 90);
+    if (navigator.vibrate) navigator.vibrate(25);
+    marcas[n - 1].setAttribute('stroke', '#22c55e');
+    $('contador').textContent = `${n} de ${TOTAL} fotos`;
+    if (alPC) enviar(blob, n); else fotos.push({ blob, n });
+    const resto = MIN_MS - (performance.now() - t0);
+    if (resto > 0) await dormir(resto);
+  }
+  enMarcha = false;
+  await terminar(n);
+}
+
+async function terminar(n) {
+  $('boton').style.display = 'none';
+  $('aro').setAttribute('stroke', '#fff');
+  if (alPC) {
+    const t = setInterval(() => msg(`Mandando a la compu… ${enviadas} de ${n}`), 300);
+    await cola; clearInterval(t);
+  }
+  if (fotos.length) {
+    msg(`Guardando ${fotos.length} fotos en el celular (carpeta Descargas)…`);
+    for (const f of fotos) {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(f.blob); a.download = `${sesion}_${String(f.n).padStart(3, '0')}.jpg`;
+      document.body.appendChild(a); a.click(); a.remove();
+      await dormir(350);
+    }
+  }
+  msg(alPC && !fotos.length ? `¡Listo! ${n} fotos ya están en la compu ✓` :
+      `¡Listo! ${n} fotos. ${enviadas ? enviadas + ' en la compu y ' : ''}${fotos.length} en Descargas: pásalas a Movies.`);
+  $('otro').style.display = 'block';
+}
+
+$('boton').onclick = () => { if (enMarcha) { enMarcha = false; $('boton').disabled = true; } else empezar(); };
+$('otro').onclick = () => location.reload();
+abrirCamara();
+</script>
+</body>
+</html>
