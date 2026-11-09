@@ -15,10 +15,12 @@
   header h1 { font-size: 18px; margin: 0 auto 0 0; font-weight: 700; }
   .chip { font-size: 12px; padding: 4px 9px; border-radius: 99px; background: rgba(255,255,255,.12); color: var(--gris); }
   .chip.ok { background: rgba(34,197,94,.18); color: #86efac; }
-  #vista { position: relative; margin: 0 auto; width: min(100vw, calc((100vh - 230px) * .75)); aspect-ratio: 3 / 4; overflow: hidden; border-radius: 14px; background: #111; }
-  video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  /* la caja toma la forma real del video y no recorta nada: lo que se ve es lo que sale en la foto */
+  #vista { position: relative; margin: 0 auto; width: min(100vw, calc((100vh - 230px) * var(--r, .75))); aspect-ratio: var(--ar, 3 / 4); overflow: hidden; border-radius: 14px; background: #111; }
+  video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
   svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
   #aro { transition: stroke .3s; }
+  #ultima { position: absolute; right: 8px; bottom: 8px; width: 30%; border: 2px solid #fff; border-radius: 8px; display: none; }
   #flash { position: absolute; inset: 0; background: #fff; opacity: 0; pointer-events: none; transition: opacity .25s; }
   #cuenta { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; font-size: 110px; font-weight: 800; text-shadow: 0 4px 24px rgba(0,0,0,.6); }
   footer { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 10px 16px max(14px, env(safe-area-inset-bottom)); text-align: center; }
@@ -45,6 +47,7 @@
     <ellipse id="aro" cx="150" cy="200" rx="130" ry="100" fill="none" stroke="#fff" stroke-width="2.5" stroke-dasharray="9 6"/>
     <g id="marcas"></g>
   </svg>
+  <img id="ultima" alt="Última foto tomada">
   <div id="flash"></div>
   <div id="cuenta"></div>
 </div>
@@ -79,9 +82,14 @@ function chip(id, texto, ok) { $(id).textContent = texto; $(id).classList.toggle
 async function abrirCamara() {
   try {
     const st = await navigator.mediaDevices.getUserMedia({ audio: false,
-      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1440 } } });
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1440 }, aspectRatio: { ideal: 4 / 3 } } });
     track = st.getVideoTracks()[0];
-    $('video').srcObject = st;
+    const v = $('video');
+    v.onloadedmetadata = () => {
+      $('vista').style.setProperty('--r', v.videoWidth / v.videoHeight);
+      $('vista').style.setProperty('--ar', `${v.videoWidth} / ${v.videoHeight}`);
+    };
+    v.srcObject = st;
     if ('ImageCapture' in window) captura = new ImageCapture(track);
   } catch (e) {
     msg('No pude abrir la cámara. Dale permiso de cámara a esta página y recárgala.');
@@ -94,23 +102,15 @@ async function abrirCamara() {
   $('boton').disabled = false;
 }
 
-// Traba enfoque, brillo y color para que todas las fotos salgan iguales (cada uno por separado: si uno falla, los otros quedan)
-async function trabar() {
-  const caps = track.getCapabilities ? track.getCapabilities() : {}, set = track.getSettings ? track.getSettings() : {};
-  const probar = async (c) => { try { await track.applyConstraints({ advanced: [c] }); return true; } catch (e) { return false; } };
-  let enf = false, bri = false;
-  if (caps.focusMode && caps.focusMode.includes('manual') && set.focusDistance != null) enf = await probar({ focusMode: 'manual', focusDistance: set.focusDistance });
-  if (!enf && caps.focusMode && caps.focusMode.includes('single-shot')) enf = await probar({ focusMode: 'single-shot' });
-  if (caps.exposureMode && caps.exposureMode.includes('manual') && set.exposureTime != null) {
-    const c = { exposureMode: 'manual', exposureTime: set.exposureTime };
-    if (set.iso != null) c.iso = set.iso;
-    bri = await probar(c);
-  }
-  if (!bri && caps.exposureMode && caps.exposureMode.includes('single-shot')) bri = await probar({ exposureMode: 'single-shot' });
-  if (caps.whiteBalanceMode && caps.whiteBalanceMode.includes('manual') && set.colorTemperature) await probar({ whiteBalanceMode: 'manual', colorTemperature: set.colorTemperature });
-  else if (caps.whiteBalanceMode && caps.whiteBalanceMode.includes('single-shot')) await probar({ whiteBalanceMode: 'single-shot' });
-  chip('chipEnfoque', enf ? 'Enfoque fijo ✓' : 'Enfoque auto', enf);
-  chip('chipBrillo', bri ? 'Brillo fijo ✓' : 'Brillo auto', bri);
+// Todo automatico. En el Honor, trabar el enfoque dejo las fotos borrosas y trabar el brillo (aun sin pedir ISO) las dejo
+// casi negras con ISO 100, aunque la vista previa se veia bien (9-nov). Con el celular quieto y el plato girando, la escena
+// casi no cambia, asi que el automatico da fotos parejas.
+async function preparar() {
+  const caps = track.getCapabilities ? track.getCapabilities() : {};
+  for (const [k, v] of [['focusMode', 'continuous'], ['exposureMode', 'continuous'], ['whiteBalanceMode', 'continuous']])
+    if (caps[k] && caps[k].includes(v)) { try { await track.applyConstraints({ advanced: [{ [k]: v }] }); } catch (e) {} }
+  chip('chipEnfoque', 'Enfoque automático ✓', true);
+  chip('chipBrillo', 'Brillo automático ✓', true);
 }
 
 let ajustesFoto;
@@ -118,7 +118,9 @@ async function sacarFoto() {
   if (captura) {
     try {
       if (ajustesFoto === undefined) {
-        try { const pc = await captura.getPhotoCapabilities(); ajustesFoto = { imageWidth: pc.imageWidth.max, imageHeight: pc.imageHeight.max }; }
+        // en el Honor salieron cuadradas (3000x3000): se pide el lado largo como ancho para buscar las de 4000x3000
+        try { const pc = await captura.getPhotoCapabilities(), a = pc.imageWidth.max, b = pc.imageHeight.max;
+              ajustesFoto = { imageWidth: Math.max(a, b), imageHeight: Math.min(a, b) }; }
         catch (e) { ajustesFoto = null; }
       }
       return await captura.takePhoto(ajustesFoto || undefined);
@@ -152,14 +154,14 @@ async function empezar() {
   enMarcha = true; sesion = estampa(); fotos = []; enviadas = 0;
   $('boton').disabled = true;
   try { await navigator.wakeLock.request('screen'); } catch (e) {}
-  msg('Trabando enfoque y brillo…');
-  await trabar();
+  msg('Preparando la cámara…');
+  await preparar();
   $('cuenta').style.display = 'flex';
   for (const n of [3, 2, 1]) { $('cuenta').textContent = n; await dormir(800); }
   $('cuenta').style.display = 'none';
   $('boton').textContent = 'Terminar'; $('boton').classList.add('parar'); $('boton').disabled = false;
   $('aro').setAttribute('stroke', 'var(--verde)');
-  msg('Da una vuelta completa alrededor del plato, despacio y sin parar. Mantenlo dentro del óvalo.');
+  msg('Gira el plato despacio una vuelta completa. Si la mano no da más, suéltalo, agárralo de nuevo y sigue.');
   let n = 0;
   while (enMarcha && n < TOTAL) {
     const t0 = performance.now();
@@ -169,6 +171,9 @@ async function empezar() {
     $('flash').style.opacity = .55; setTimeout(() => { $('flash').style.opacity = 0; }, 90);
     if (navigator.vibrate) navigator.vibrate(25);
     marcas[n - 1].setAttribute('stroke', '#22c55e');
+    const u = $('ultima');  // la foto real, por si la vista previa no coincide con ella
+    if (u.src) URL.revokeObjectURL(u.src);
+    u.src = URL.createObjectURL(blob); u.style.display = 'block';
     $('contador').textContent = `${n} de ${TOTAL} fotos`;
     if (alPC) enviar(blob, n); else fotos.push({ blob, n });
     const resto = MIN_MS - (performance.now() - t0);
