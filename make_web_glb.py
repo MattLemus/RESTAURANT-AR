@@ -149,7 +149,7 @@ bpy.ops.export_scene.gltf(
 # Texturas sin perdida: jpegtran reescribe cada JPEG con Huffman optimizado y progresivo, mismos pixeles (-9%).
 # Despues se rearma el binario del GLB con los nuevos largos.
 import json, os, struct, subprocess
-JPEGTRAN = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'tools', 'jpegtran.exe')
+JPEGTRAN = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'tools', 'jpegtran.exe')
 f = open(dst, 'rb').read()
 n = struct.unpack('<I', f[12:16])[0]
 j = json.loads(f[20:20 + n])

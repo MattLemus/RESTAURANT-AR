@@ -53,7 +53,7 @@ bpy.ops.wm.usd_export(
 # progresivo, asi que jpegtran las pasa a JPEG normal (baseline), mismos pixeles.
 import os, subprocess, tempfile, zipfile
 from pxr import Sdf
-JPEGTRAN = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'tools', 'jpegtran.exe')
+JPEGTRAN = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'tools', 'jpegtran.exe')
 tmp = tempfile.mkdtemp()
 with zipfile.ZipFile(dst) as z:
     names = z.namelist()
