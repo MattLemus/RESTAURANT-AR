@@ -178,7 +178,7 @@ setTimeout(() => { if (!gotSensor) msg.textContent = 'Este celular no entrega da
 // Un cuadro en calculo y como mucho uno esperando (el mas nuevo reemplaza al que esperaba): nunca se forma una cola de cuadros
 // viejos (LOGICA_FLUIDEZ, seccion 4). Cada cuadro se toma en dos tamanos a la vez: completo para mostrarlo, chico para seguir puntos
 const TW = 320 // px del lado largo del cuadro chico: alcanza para la veta de la mesa y es rapido en celulares modestos
-const tracker = new Worker('ar-track.js')
+const tracker = new Worker('ar-track.js?v=' + Date.now())
 tracker.postMessage({h: CAM_H, fov: LONG_FOV})
 let capturing = false, active = null, pending = null, nextId = 0, shown = null, capMs = 0
 const retire = [] // cuadros ya reemplazados en pantalla: se liberan despues del dibujo que sube el nuevo
@@ -187,16 +187,38 @@ const send = (f) => {
   if (!gotSensor) { f.small.close(); f.small = null; return present(f, null) } // sin sensor no hay seguimiento: se muestra la camara igual
   if (performance.now() < bruscoHasta) { mostrar(false); f.small.close(); f.small = null; return present(f, null) } // bloqueado: ver bruscoHasta
   active = f; f.sent = performance.now()
-  tracker.postMessage({id: f.id, bmp: f.small, t: f.t, q: sensorAt(f.t, tmp).toArray(), gyro: hasGyro, debug: DEBUG,
-    brusco: tiron, calma: performance.now() >= agitadoHasta}, [f.small]); f.small = null; tiron = false
+  const s = f.small
+  tracker.postMessage({id: f.id, ...(s.gray ? {gray: s.gray, gw: s.gw, gh: s.gh} : {bmp: s}), t: f.t, q: sensorAt(f.t, tmp).toArray(), gyro: hasGyro, debug: DEBUG,
+    brusco: tiron, calma: performance.now() >= agitadoHasta}, [s.gray ? s.gray.buffer : s]); f.small = null; tiron = false
 }
+// Imagen en gris del cuadro, reducida a gw x gh. En el Honor el cuadro del video ya viene en I420 (el primer plano es la luminancia),
+// y copiarlo con VideoFrame cuesta ~17 ms; dibujarlo en un canvas y getImageData costaba 110-250 ms y frenaba todo a 4-7 cuadros/s.
+// null = este navegador no lo permite (se usa el camino de antes, createImageBitmap + getImageData en el seguidor).
+let sinVF = typeof VideoFrame === 'undefined'
+const grisDe = async (gw, gh) => {
+  if (sinVF) return null
+  const vf = new VideoFrame(cam)
+  try {
+    if (vf.format !== 'I420' && vf.format !== 'NV12') return (sinVF = true, null)
+    const r = vf.visibleRect, buf = new Uint8Array(vf.allocationSize()), [{stride}] = await vf.copyTo(buf)
+    const g = new Uint8Array(gw * gh), sx = r.width / gw, sy = r.height / gh
+    for (let y = 0; y < gh; y++) for (let x = 0; x < gw; x++) { // 4 muestras por pixel; Y va de 16 a 235
+      const a = Math.floor((y + 0.25) * sy) * stride, b = Math.floor((y + 0.75) * sy) * stride, c = Math.floor((x + 0.25) * sx), d = Math.floor((x + 0.75) * sx)
+      g[y * gw + x] = Math.min(255, Math.max(0, ((buf[a + c] + buf[a + d] + buf[b + c] + buf[b + d]) / 4 - 16) * 1.164))
+    }
+    return g
+  } catch (e) { return (sinVF = true, null) } finally { vf.close() }
+}
+if (DEBUG) window.dbgGris = {grisDe, cam} // ?debug: para comparar con el camino de canvas
 const onFrame = (now, meta) => {
   if (cam.requestVideoFrameCallback) cam.requestVideoFrameCallback(onFrame); else requestAnimationFrame(pollFrame)
   if (capturing || !cam.videoWidth) return
   if (active && performance.now() - active.sent > 2000) { drop(active); active = null } // el seguidor no respondio: no trabar todo
   const t = meta?.captureTime || now, k = TW / Math.max(cam.videoWidth, cam.videoHeight), c0 = performance.now()
   capturing = true
-  Promise.all([createImageBitmap(cam), createImageBitmap(cam, {resizeWidth: Math.round(cam.videoWidth * k), resizeHeight: Math.round(cam.videoHeight * k), resizeQuality: 'medium'})])
+  const gw = Math.round(cam.videoWidth * k), gh = Math.round(cam.videoHeight * k)
+  Promise.all([createImageBitmap(cam), grisDe(gw, gh)])
+    .then(async ([full, gray]) => [full, gray ? {gray, gw, gh, close() {}} : await createImageBitmap(cam, {resizeWidth: gw, resizeHeight: gh, resizeQuality: 'medium'})])
     .then(([full, small]) => {
       capturing = false; capMs = capMs * 0.9 + (performance.now() - c0) * 0.1
       const f = {id: ++nextId, t, full, small}
@@ -277,7 +299,7 @@ const debugInfo = (m) => { // ?debug: una linea abajo, sin tapar el plato
   nFrames++; const now = performance.now(); if (now - fpsT > 1000) { fps = nFrames * 1000 / (now - fpsT); nFrames = 0; fpsT = now }
   const s = m.st || {}
   $('dbg').hidden = false
-  $('dbg').textContent = `${fps.toFixed(0)} cuadros/s | seguidor ${m.ms.toFixed(0)} ms (lk ${(s.lk || 0).toFixed(0)} img ${(s.img || 0).toFixed(0)}) captura ${capMs.toFixed(0)} ms | ` +
+  $('dbg').textContent = `${fps.toFixed(0)} cuadros/s | seguidor ${m.ms.toFixed(0)} ms (lk ${(s.lk || 0).toFixed(0)} img ${(s.img || 0).toFixed(0)}: leer ${(s.gd || 0).toFixed(0)} gris ${(s.gr || 0).toFixed(0)} pir ${(s.py || 0).toFixed(0)}) captura ${capMs.toFixed(0)} ms | ` +
     `${m.state} ${still ? 'QUIETO' : 'mov ' + motion.toFixed(2)} | ${m.n}/${m.maxp} puntos ${m.kf} vistas | giroscopio ${hasGyro ? 'si' : 'no'} | ${fw}x${fh}`
   // para pruebas automaticas: cuadro recien procesado (su numero va en m.strip) y la pose con la que se dibuja
   window.dbg = {strip: m.strip, camera, plate, still, motion, ms: m.ms, n: m.n, state: m.state, flow: m.flow, c: m.c, dt: m.dt}; window.dbgHook?.()

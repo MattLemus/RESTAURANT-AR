@@ -253,7 +253,7 @@ const relocalize = (qF, t) => {
 
 onmessage = ({data: m}) => {
   if (m.h) { c[1] = m.h; cOk = c.slice(); fov = m.fov; return } // configuracion inicial
-  const t0 = performance.now(), {bmp, t, id} = m, w = bmp.width, h = bmp.height, st = {}
+  const t0 = performance.now(), {bmp, t, id} = m, w = m.gray ? m.gw : bmp.width, h = m.gray ? m.gh : bmp.height, st = {}
   const qF = qmul(qb, m.q) // orientacion del sensor con su error ya conocido descontado
   if (w !== tw || h !== th) { // primer cuadro o el celular cambio de orientacion: se empieza de cero
     tw = w; th = h; pts = []; kfs = []; desv.length = 0
@@ -264,10 +264,13 @@ onmessage = ({data: m}) => {
     blur = new jsfeat.matrix_t(w, h, jsfeat.U8C1_t)
     corners = Array.from({length: (w * h) >> 2}, () => new jsfeat.keypoint_t())
   }
-  ctx.drawImage(bmp, 0, 0); bmp.close()
-  jsfeat.imgproc.grayscale(ctx.getImageData(0, 0, w, h).data, w, h, currPyr.data[0])
+  const ta = performance.now()
+  if (m.gray) currPyr.data[0].data.set(m.gray) // ya viene en gris desde ar.html (VideoFrame)
+  else { ctx.drawImage(bmp, 0, 0); bmp.close(); jsfeat.imgproc.grayscale(ctx.getImageData(0, 0, w, h).data, w, h, currPyr.data[0]) }
+  const tb = performance.now()
+  const tc = performance.now()
   currPyr.build(currPyr.data[0], true)
-  const t1 = performance.now(); st.img = t1 - t0
+  const t1 = performance.now(); st.img = t1 - t0; st.gd = tb - ta; st.gr = 0; st.py = t1 - tc
   // un cuadro atrasado (el celular ocupado) no es motivo para tirar los puntos: se buscan mas lejos (la piramide y la pose
   // prevista lo cubren). Solo una pausa larga (la pagina en segundo plano) invalida lo que se sabia de la imagen anterior
   const dt = lastT ? (t - lastT) / 1000 : 0
