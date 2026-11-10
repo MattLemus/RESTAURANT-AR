@@ -29,6 +29,21 @@
   #boton { width: 78px; height: 78px; border-radius: 50%; border: 5px solid #fff; background: var(--verde); color: #fff; font-size: 13px; font-weight: 700; cursor: pointer; }
   #boton.parar { background: #ef4444; }
   #boton:disabled { opacity: .4; }
+  /* altura: barra a la izquierda (franja verde = donde debe estar la marca blanca) y cartel arriba */
+  #altura { position: absolute; left: 10px; top: 14%; bottom: 14%; width: 12px; border-radius: 6px; background: rgba(0,0,0,.55); outline: 1px solid rgba(255,255,255,.35); display: none; }
+  #franja { position: absolute; left: 0; right: 0; border-radius: 6px; background: var(--verde); opacity: .85; }
+  #yo { position: absolute; left: -7px; width: 26px; height: 6px; margin-top: -3px; border-radius: 3px; background: #fff; box-shadow: 0 0 0 2px #000; transition: top .1s linear; }
+  #estado { position: absolute; left: 34px; right: 10px; top: 10px; padding: 9px 12px; border-radius: 12px; font-size: 17px; font-weight: 700; text-align: center; background: #f59e0b; color: #000; display: none; }
+  #estado.ok { background: var(--verde); color: #fff; }
+  .aviso { position: fixed; inset: 0; z-index: 5; display: none; align-items: center; justify-content: center; padding: 20px; background: rgba(0,0,0,.78); }
+  .aviso.on { display: flex; }
+  .tarjeta { background: #1c1917; border-radius: 20px; padding: 22px 18px; width: 100%; max-width: 420px; display: grid; gap: 14px; text-align: center; }
+  .tarjeta h2 { margin: 0; font-size: 23px; }
+  .tarjeta p { margin: 0; color: #d6d3d1; font-size: 16px; line-height: 1.4; }
+  .tarjeta svg { justify-self: center; position: static; width: 240px; height: 114px; }
+  .tarjeta button { padding: 14px; border-radius: 12px; border: 0; background: var(--verde); color: #fff; font-size: 17px; font-weight: 700; }
+  @keyframes gira { to { transform: rotate(360deg); } }
+  .gira { transform-origin: 50px 56px; animation: gira 6s linear infinite; }
   #otro { display: none; padding: 12px 22px; border-radius: 12px; border: 0; background: #fff; color: #000; font-size: 15px; font-weight: 700; }
 </style>
 </head>
@@ -37,16 +52,19 @@
   <h1>Escanear plato</h1>
   <span class="chip" id="chipEnfoque">Enfoque</span>
   <span class="chip" id="chipBrillo">Brillo</span>
+  <span class="chip" id="chipAltura">Altura</span>
   <span class="chip" id="chipDestino">…</span>
 </header>
 <div id="vista">
   <video id="video" playsinline muted autoplay></video>
   <svg viewBox="0 0 300 400" preserveAspectRatio="none" aria-hidden="true">
-    <defs><mask id="hueco"><rect width="300" height="400" fill="#fff"/><ellipse cx="150" cy="200" rx="130" ry="100" fill="#000"/></mask></defs>
+    <defs><mask id="hueco"><rect width="300" height="400" fill="#fff"/><ellipse id="huecoE" cx="150" cy="200" rx="130" ry="100" fill="#000"/></mask></defs>
     <rect width="300" height="400" fill="rgba(0,0,0,.5)" mask="url(#hueco)"/>
     <ellipse id="aro" cx="150" cy="200" rx="130" ry="100" fill="none" stroke="#fff" stroke-width="2.5" stroke-dasharray="9 6"/>
     <g id="marcas"></g>
   </svg>
+  <div id="altura"><div id="franja"></div><div id="yo"></div></div>
+  <div id="estado" role="status"></div>
   <img id="ultima" alt="Última foto tomada">
   <div id="flash"></div>
   <div id="cuenta"></div>
@@ -57,25 +75,111 @@
   <button id="boton" disabled aria-label="Empezar">Empezar</button>
   <button id="otro">Escanear otro plato</button>
 </footer>
+<div class="aviso" id="aviso"><div class="tarjeta"><h2 id="avisoT"></h2><div id="avisoD"></div><p id="avisoP"></p><button id="avisoB">Entendido</button></div></div>
 <script>
-const TOTAL = 40;          // ~1 vuelta en 1 minuto (cada foto tarda ~1.5 s en el Honor)
+// 3 vueltas del plato, una por altura del celular. Con una sola altura (las 40 fotos del pollo salieron todas entre
+// 36 y 42 grados, 10-nov) los costados de la comida y el fondo del envase no salen en ninguna foto y quedan rayados.
+// min/max: angulo de la camara hacia abajo (0 = mirando de frente, 90 = desde arriba), medido con el acelerometro.
+const VUELTAS = [
+  { nombre: 'Alta',  min: 58, max: 80, texto: 'Celular alto, mirando el plato casi desde arriba.' },
+  { nombre: 'Media', min: 35, max: 55, texto: 'Celular a media altura, mirando el plato en diagonal.' },
+  { nombre: 'Baja',  min: 12, max: 30, texto: 'Celular bajo, casi a la altura de la mesa, mirando la comida de lado.' },
+];
+// Dos formas de dar la vuelta. En la compu (localhost, por cable): celular quieto y el plato gira. Por internet (el
+// dueno del restaurante, sin base giratoria): el plato quieto en la mesa y el camina alrededor con el celular.
+const CAMINAR = !['localhost', '127.0.0.1'].includes(location.hostname);
+const TOTAL = 34;          // fotos por vuelta: ~50 s cada una (cada foto tarda ~1.5 s en el Honor)
 const MIN_MS = 1200;       // separacion minima entre fotos
 const $ = id => document.getElementById(id);
 const msg = t => { $('msg').textContent = t; };
 const dormir = ms => new Promise(r => setTimeout(r, ms));
+const deVuelta = {};  // numero de foto -> vuelta, para la revision del final
+let k = 0, n = 0, esperando = false, abajo = null, enFranja = true, cambio = 0, sensores = false;
 let track, captura, enMarcha = false, alPC = false, sesion, fotos = [], enviadas = 0, cola = Promise.resolve();
 
-// 40 marquitas alrededor del ovalo: se pintan de verde con cada foto
+// marquitas alrededor del ovalo: se pintan de verde con cada foto de la vuelta
 const NS = 'http://www.w3.org/2000/svg';
 for (let i = 0; i < TOTAL; i++) {
   const a = -Math.PI / 2 + i * 2 * Math.PI / TOTAL, c = Math.cos(a), s = Math.sin(a);
   const l = document.createElementNS(NS, 'line');
-  l.setAttribute('x1', 150 + 137 * c); l.setAttribute('y1', 200 + 107 * s);
-  l.setAttribute('x2', 150 + 147 * c); l.setAttribute('y2', 200 + 117 * s);
-  l.setAttribute('stroke', 'rgba(255,255,255,.35)'); l.setAttribute('stroke-width', '3'); l.setAttribute('stroke-linecap', 'round');
+  l.setAttribute('stroke-width', '3'); l.setAttribute('stroke-linecap', 'round');
   $('marcas').appendChild(l);
 }
 const marcas = [...$('marcas').children];
+
+// El ovalo se aplasta segun la altura: un plato visto de lado se ve mas chato que visto desde arriba
+function ovalo() {
+  const v = VUELTAS[k], ry = Math.max(65, 130 * Math.sin((v.min + v.max) / 2 * Math.PI / 180));
+  $('aro').setAttribute('ry', ry); $('huecoE').setAttribute('ry', ry);
+  marcas.forEach((l, i) => {
+    const a = -Math.PI / 2 + i * 2 * Math.PI / TOTAL, c = Math.cos(a), s = Math.sin(a);
+    l.setAttribute('x1', 150 + 137 * c); l.setAttribute('y1', 200 + (ry + 7) * s);
+    l.setAttribute('x2', 150 + 147 * c); l.setAttribute('y2', 200 + (ry + 17) * s);
+    l.setAttribute('stroke', 'rgba(255,255,255,.35)');
+  });
+  $('franja').style.top = `${100 - v.max / 90 * 100}%`; $('franja').style.height = `${(v.max - v.min) / 90 * 100}%`;
+}
+
+// Vista de costado (a que altura va el celular) y de arriba (el celular quieto, el plato gira)
+function dibujo() {
+  const v = VUELTAS[k], g = (v.min + v.max) / 2, a = g * Math.PI / 180;
+  const cx = 60, cy = 78, r = 50, px = cx - r * Math.cos(a), py = cy - r * Math.sin(a);
+  return `<svg viewBox="0 0 210 100" aria-hidden="true">
+    <path d="M${cx - r} ${cy} A${r} ${r} 0 0 1 ${cx} ${cy - r}" fill="none" stroke="#57534e" stroke-dasharray="3 4"/>
+    <line x1="4" y1="${cy + 4}" x2="116" y2="${cy + 4}" stroke="#a8a29e" stroke-width="2"/>
+    <ellipse cx="${cx}" cy="${cy}" rx="22" ry="4" fill="#e7e5e4"/><ellipse cx="${cx}" cy="${cy - 3}" rx="12" ry="4" fill="#f59e0b"/>
+    <line x1="${px}" y1="${py}" x2="${cx}" y2="${cy - 3}" stroke="#22c55e" stroke-dasharray="2 3"/>
+    <g transform="translate(${px} ${py}) rotate(${g - 90})"><rect x="-4" y="-11" width="8" height="22" rx="2" fill="#fff"/></g>
+    <g transform="translate(110 0)">
+      <g class="${CAMINAR ? 'gira' : ''}"><rect x="45" y="2" width="10" height="16" rx="2" fill="#fff"/>
+        <path d="M50 19 L50 28" stroke="#22c55e" stroke-width="2"/></g>
+      <g class="${CAMINAR ? '' : 'gira'}"><circle cx="50" cy="56" r="${CAMINAR ? 20 : 26}" fill="#e7e5e4"/>
+        <circle cx="50" cy="56" r="${CAMINAR ? 11 : 15}" fill="#f59e0b"/>
+        ${CAMINAR ? '' : '<circle cx="50" cy="36" r="4" fill="#22c55e"/>'}</g>
+    </g></svg>`;
+}
+function mostrarAviso() {
+  const v = VUELTAS[k];
+  ovalo();
+  $('avisoT').textContent = `Vuelta ${k + 1} de ${VUELTAS.length} · ${v.nombre}`;
+  $('avisoD').innerHTML = dibujo();
+  $('avisoP').textContent = v.texto + ' Mueve el celular hasta que la marca blanca entre en la franja verde. Después toca el botón y ' +
+    (CAMINAR ? 'camina una vuelta completa alrededor del plato, despacio y sin tocarlo.' : 'gira el plato una vuelta completa, despacio.');
+  $('aviso').classList.add('on');
+}
+
+// Altura = inclinacion del celular: la gravedad sobre el eje de la camara (el Honor solo tiene acelerometro, alcanza)
+const iOS = /iP(hone|ad|od)/.test(navigator.userAgent);  // en iOS el signo viene al reves
+function deMovimiento(e) {
+  const g = e.accelerationIncludingGravity;
+  if (!g || g.z == null) return;
+  const z = (iOS ? -g.z : g.z) / (Math.hypot(g.x, g.y, g.z) || 1);
+  const ang = Math.asin(Math.max(-1, Math.min(1, z))) * 180 / Math.PI;
+  abajo = abajo == null ? ang : abajo + 0.25 * (ang - abajo);  // suaviza el temblor
+}
+async function pedirSensores() {
+  if (sensores) return;
+  sensores = true;
+  const E = window.DeviceMotionEvent;
+  if (E && E.requestPermission) { try { await E.requestPermission(); } catch (_) {} }
+  addEventListener('devicemotion', deMovimiento);
+}
+// 10 veces por segundo: marca de altura, cartel y boton. Sin sensor no se bloquea nada: queda el dibujo de guia.
+setInterval(() => {
+  const v = VUELTAS[k], hay = abajo != null;
+  const dentro = !hay || (abajo >= v.min && abajo <= v.max);
+  if (dentro !== enFranja) { if (++cambio >= 4) { enFranja = dentro; cambio = 0; } } else cambio = 0;  // sin parpadeo
+  const activo = hay && (esperando || enMarcha), e = $('estado');
+  $('altura').style.display = activo ? 'block' : 'none';
+  e.style.display = activo ? 'block' : 'none';
+  if (sensores) chip('chipAltura', hay ? `Altura ${Math.round(abajo)}°` : 'Sin sensor de altura', hay && enFranja);
+  if (esperando) $('boton').disabled = !enFranja;
+  if (!activo) return;
+  $('yo').style.top = `${100 - Math.max(0, Math.min(90, abajo)) / 90 * 100}%`;
+  e.classList.toggle('ok', enFranja);
+  e.textContent = enFranja ? (enMarcha ? '✓ Altura correcta' : '✓ Altura correcta · toca el botón')
+    : (abajo < v.min ? '↑ Sube el celular e inclínalo hacia el plato' : '↓ Baja el celular') + (enMarcha ? ' · fotos en pausa' : '');
+}, 100);
 
 function chip(id, texto, ok) { $(id).textContent = texto; $(id).classList.toggle('ok', !!ok); }
 
@@ -98,8 +202,7 @@ async function abrirCamara() {
   // Si la pagina viene de la compu (servidor local), las fotos se mandan directo alla
   try { alPC = (await fetch('subir/ping', { cache: 'no-store' })).ok; } catch (e) { alPC = false; }
   chip('chipDestino', alPC ? 'Fotos → compu' : 'Fotos → celular', alPC);
-  msg('Pon el plato dentro del óvalo, bien cerca, y toca Empezar.');
-  $('boton').disabled = false;
+  mostrarAviso();
 }
 
 // Todo automatico. En el Honor, trabar el enfoque dejo las fotos borrosas y trabar el brillo (aun sin pedir ISO) las dejo
@@ -151,41 +254,52 @@ function estampa() {
 }
 
 async function empezar() {
-  enMarcha = true; sesion = estampa(); fotos = []; enviadas = 0;
+  enMarcha = true; esperando = false;
   $('boton').disabled = true;
-  try { await navigator.wakeLock.request('screen'); } catch (e) {}
-  msg('Preparando la cámara…');
-  await preparar();
+  if (!sesion) {
+    sesion = estampa(); fotos = []; enviadas = 0;
+    try { await navigator.wakeLock.request('screen'); } catch (e) {}
+    msg('Preparando la cámara…');
+    await preparar();
+  }
   $('cuenta').style.display = 'flex';
-  for (const n of [3, 2, 1]) { $('cuenta').textContent = n; await dormir(800); }
+  for (const c of [3, 2, 1]) { $('cuenta').textContent = c; await dormir(800); }
   $('cuenta').style.display = 'none';
   $('boton').textContent = 'Terminar'; $('boton').classList.add('parar'); $('boton').disabled = false;
   $('aro').setAttribute('stroke', 'var(--verde)');
-  msg('Gira el plato despacio una vuelta completa. Si la mano no da más, suéltalo, agárralo de nuevo y sigue.');
-  let n = 0;
-  while (enMarcha && n < TOTAL) {
+  msg(CAMINAR ? 'Camina despacio alrededor del plato, siempre dentro del óvalo. Termina la vuelta justo cuando se llenen las marcas.'
+    : 'Gira el plato despacio una vuelta completa. Si la mano no da más, suéltalo, agárralo de nuevo y sigue.');
+  let hechas = 0;
+  while (enMarcha && hechas < TOTAL) {
+    if (!enFranja) { await dormir(150); continue; }  // fuera de altura: no se saca la foto, el cartel dice que hacer
     const t0 = performance.now();
     const blob = await sacarFoto();
     if (!blob) continue;
-    n++;
+    n++; hechas++; deVuelta[n] = k;
     $('flash').style.opacity = .55; setTimeout(() => { $('flash').style.opacity = 0; }, 90);
     if (navigator.vibrate) navigator.vibrate(25);
-    marcas[n - 1].setAttribute('stroke', '#22c55e');
+    marcas[hechas - 1].setAttribute('stroke', '#22c55e');
     const u = $('ultima');  // la foto real, por si la vista previa no coincide con ella
     if (u.src) URL.revokeObjectURL(u.src);
     u.src = URL.createObjectURL(blob); u.style.display = 'block';
-    $('contador').textContent = `${n} de ${TOTAL} fotos`;
+    $('contador').textContent = `Vuelta ${k + 1} de ${VUELTAS.length} · ${hechas} de ${TOTAL} fotos`;
     if (alPC) enviar(blob, n); else fotos.push({ blob, n });
     const resto = MIN_MS - (performance.now() - t0);
     if (resto > 0) await dormir(resto);
   }
+  const cortada = !enMarcha;
   enMarcha = false;
-  await terminar(n);
+  $('aro').setAttribute('stroke', '#fff');
+  if (cortada || k + 1 === VUELTAS.length) return terminar(n);
+  k++;
+  if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
+  $('boton').textContent = 'Seguir'; $('boton').classList.remove('parar'); $('boton').disabled = true;
+  msg(`Vuelta ${k} lista ✓`);
+  mostrarAviso();
 }
 
 async function terminar(n) {
   $('boton').style.display = 'none';
-  $('aro').setAttribute('stroke', '#fff');
   if (alPC) {
     const t = setInterval(() => msg(`Mandando a la compu… ${enviadas} de ${n}`), 300);
     await cola; clearInterval(t);
@@ -199,6 +313,21 @@ async function terminar(n) {
       await dormir(350);
     }
   }
+  if (alPC && !fotos.length) {
+    msg('Revisando las fotos…');
+    let r = null;
+    try { r = await (await fetch(`subir/revisar?s=${sesion}`, { cache: 'no-store' })).json(); } catch (e) {}
+    if (r) {
+      // por vuelta: fotos que llegaron y no salieron movidas. Hacen falta 3 de cada 4 para que el plato salga entero
+      const buenas = VUELTAS.map((_, j) => r.fotos.filter(x => deVuelta[x] === j && !r.movidas.includes(x)).length);
+      const mal = VUELTAS.map((v, j) => ({ v, b: buenas[j] })).filter(x => x.b < 0.75 * TOTAL);
+      $('otro').style.display = 'block';
+      if (!mal.length) return msg(`✓ Quedó bien: ${r.fotos.length} fotos, las 3 alturas completas. Ya puedes retirar el plato.`);
+      $('otro').textContent = 'Repetir el escaneo';
+      return msg('✗ Hay que repetirlo. ' + mal.map(x => `Vuelta ${x.v.nombre.toLowerCase()}: ` +
+        (x.b ? `solo ${x.b} de ${TOTAL} fotos sirven` : 'no se hizo')).join('; ') + '. Muévete más despacio y completa las 3 vueltas.');
+    }
+  }
   msg(alPC && !fotos.length ? `¡Listo! ${n} fotos ya están en la compu ✓` :
       `¡Listo! ${n} fotos. ${enviadas ? enviadas + ' en la compu y ' : ''}${fotos.length} en Descargas: pásalas a Movies.`);
   $('otro').style.display = 'block';
@@ -206,6 +335,12 @@ async function terminar(n) {
 
 $('boton').onclick = () => { if (enMarcha) { enMarcha = false; $('boton').disabled = true; } else empezar(); };
 $('otro').onclick = () => location.reload();
+$('avisoB').onclick = () => {
+  $('aviso').classList.remove('on');
+  pedirSensores();
+  esperando = true; $('boton').disabled = !enFranja;
+  msg(`Vuelta ${k + 1} de ${VUELTAS.length} · ${VUELTAS[k].nombre}: pon el plato dentro del óvalo, bien cerca, y toca el botón cuando esté verde.`);
+};
 abrirCamara();
 </script>
 </body>
