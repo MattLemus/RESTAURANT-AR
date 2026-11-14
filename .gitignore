@@ -2,3 +2,10 @@ captura/fotos/
 captura/trabajos/
 __pycache__/
 graphify-out/
+
+.venv/
+.pytest_cache/
+scan-data/
+test-results/
+respaldo_antes_captura_inteligente/
+*.log

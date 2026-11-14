@@ -1,9 +1,12 @@
 # blender -b --factory-startup -P glb_to_usdz.py -- in.glb out.usdz
+from pathlib import Path
 import os
 import sys
 import bpy
 
 src, dst = sys.argv[sys.argv.index('--') + 1:][:2]
+if Path(src).resolve() == Path(dst).resolve() or Path(dst).exists():
+    raise ValueError('Usa una salida USDZ nueva para conservar archivos existentes')
 
 bpy.ops.object.select_all(action='SELECT')
 bpy.ops.object.delete()
@@ -16,8 +19,13 @@ for o in meshes:
           'size', [round(max(c[i] for c in xs) - min(c[i] for c in xs), 4) for i in range(3)],
           'minZ', round(min(c[2] for c in xs), 4))
     for m in o.data.materials:
+        if not m or not m.use_nodes:
+            continue
         nodes = m.node_tree.nodes
-        bsdf = next(n for n in nodes if n.type == 'BSDF_PRINCIPLED')
+        bsdf = next((n for n in nodes if n.type == 'BSDF_PRINCIPLED'), None)
+        if bsdf is None:
+            print('Material sin Principled: revisar apariencia en Quick Look', m.name)
+            continue
         # glTF metallicFactor 0 llega como textura x 0 (nodo MATH); el exportador USD
         # ignora ese nodo y usaria la textura sola, asi que se fija metalico = 0
         s = bsdf.inputs['Metallic']
@@ -61,7 +69,7 @@ with zipfile.ZipFile(dst) as z:
 w = Sdf.ZipFileWriter.CreateNew(dst + '.tmp')  # sin comprimir y alineado a 64 bytes, como pide USDZ
 for name in names:
     f = os.path.join(tmp, name)
-    if name.lower().endswith(('.jpg', '.jpeg')):
+    if name.lower().endswith(('.jpg', '.jpeg')) and os.path.isfile(JPEGTRAN):
         subprocess.run([JPEGTRAN, '-copy', 'none', '-optimize', '-outfile', f + '.opt', f], check=True)
         os.replace(f + '.opt', f)
     w.AddFile(f, name)

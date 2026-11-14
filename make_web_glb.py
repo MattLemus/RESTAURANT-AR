@@ -4,6 +4,7 @@
 # trocitos vecinos y el queso/arroz se veia gris y "brilloso" como hielo. Por eso UV a 16 bits y JPEG 95.
 # ancho_cm: ancho real del plato visto desde arriba (los modelos generados vienen de ~1 m). triangulos: maximo, para que
 # cargue rapido (la hamburguesa de 977k tris tardaba 9 s en Quick Look).
+from pathlib import Path
 import sys
 import bpy
 import bmesh
@@ -14,6 +15,12 @@ a = sys.argv[sys.argv.index('--') + 1:]
 src, dst = a[:2]
 CM = float(a[2]) if len(a) > 2 else 0
 TRIS = int(a[3]) if len(a) > 3 else 0
+NIVELAR = 'sin_nivelar' not in a[4:]
+DRACO = '--draco' in a[4:]
+if Path(src).resolve() == Path(dst).resolve() or Path(dst).exists():
+    raise ValueError('Usa una salida nueva, distinta del maestro')
+if CM < 0 or TRIS < 0:
+    raise ValueError('Ancho y presupuesto de triángulos deben ser positivos')
 
 bpy.ops.object.select_all(action='SELECT')
 bpy.ops.object.delete()
@@ -50,7 +57,7 @@ def reducir(o, ancho):
     kd.balance()
     # Las semillas y gotas de salsa estan a ~1 mm de la superficie y se quedan; lo que flota mas lejos (1% del ancho)
     # son restos del generador, como los trozos de borde junto al plato roto de la hamburguesa
-    lejos = {p for v, p in pv.items() if p not in grande and kd.find(v.co)[2] > 0.01 * ancho}
+    lejos = set()  # No eliminar ingredientes por tamaño o distancia
     bmesh.ops.delete(bm, geom=[f for f in bm.faces if pieza[f.index] in lejos], context='FACES')
     # solo se reducen las piezas grandes (pan, carne, plato): las chicas (semillas, gotas) se apartan y se desharian
     chicas = sum(1 for f in bm.faces if pieza[f.index] not in grande)
@@ -94,26 +101,29 @@ bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
 # Nivelar: Pixal3D arma el plato con la inclinacion de la camara de la foto (un plato vino a 41 grados).
 # El eje con mas area de caras alineada (arriba y abajo del plato, la mesa del plato) es la vertical del plato.
 import numpy as np
-M = np.zeros((3, 3))
-for o in meshes:
-    for p in o.data.polygons:
-        n = np.array(p.normal)
-        M += p.area * np.outer(n, n)
-up = Vector(np.linalg.eigh(M)[1][:, 2])
-if up.z < 0:
-    up = -up
-ang = up.angle(Vector((0, 0, 1)))
-# shortcut: si el eje sale a mas de 60 grados se asume que no es el plato (plato muy chico o comida alta) y no se toca
-if 0.5 < np.degrees(ang) < 60:
-    R = up.rotation_difference(Vector((0, 0, 1))).to_matrix().to_4x4()
+if NIVELAR:
+    M = np.zeros((3, 3))
     for o in meshes:
-        o.data.transform(R)
-print('NIVELAR', round(float(np.degrees(ang)), 1), 'grados')
-# girar sobre la mesa para que el lado largo del plato quede en X: asi ancho_cm mide el plato, no su diagonal
-xy = np.array([(v.co.x, v.co.y) for o in meshes for v in o.data.vertices])
-ex = np.linalg.eigh(np.cov(xy.T))[1][:, 1]
-for o in meshes:
-    o.data.transform(Matrix.Rotation(-np.arctan2(ex[1], ex[0]), 4, 'Z'))
+        for p in o.data.polygons:
+            n = np.array(p.normal)
+            M += p.area * np.outer(n, n)
+    up = Vector(np.linalg.eigh(M)[1][:, 2])
+    if up.z < 0:
+        up = -up
+    ang = up.angle(Vector((0, 0, 1)))
+    # shortcut: si el eje sale a mas de 60 grados se asume que no es el plato (plato muy chico o comida alta) y no se toca
+    if 0.5 < np.degrees(ang) < 60:
+        R = up.rotation_difference(Vector((0, 0, 1))).to_matrix().to_4x4()
+        for o in meshes:
+            o.data.transform(R)
+    print('NIVELAR', round(float(np.degrees(ang)), 1), 'grados')
+    # girar sobre la mesa para que el lado largo del plato quede en X: asi ancho_cm mide el plato, no su diagonal
+    xy = np.array([(v.co.x, v.co.y) for o in meshes for v in o.data.vertices])
+    ex = np.linalg.eigh(np.cov(xy.T))[1][:, 1]
+    for o in meshes:
+        o.data.transform(Matrix.Rotation(-np.arctan2(ex[1], ex[0]), 4, 'Z'))
+else:
+    print('SIN NIVELAR: se conserva la orientación de la reconstrucción')
 
 pts = [v.co for o in meshes for v in o.data.vertices]
 lo = Vector((min(p.x for p in pts), min(p.y for p in pts), min(p.z for p in pts)))
@@ -127,21 +137,28 @@ for o in meshes:
         reducir(o, k * max(hi.x - lo.x, hi.y - lo.y))
     print('MESH', o.name, len(o.data.polygons), 'tris, size', tuple(round(c * k, 3) for c in hi - lo))
     for m in o.data.materials:
-        bsdf = next(n for n in m.node_tree.nodes if n.type == 'BSDF_PRINCIPLED')
+        if not m or not m.use_nodes:
+            continue
+        bsdf = next((n for n in m.node_tree.nodes if n.type == 'BSDF_PRINCIPLED'), None)
+        if bsdf is None:
+            continue  # conservar material fotográfico unlit
         # metallicFactor 0 llega como textura x 0; se deja fijo en 0 (ver glb_to_usdz.py)
         s = bsdf.inputs['Metallic']
         if s.is_linked and s.links[0].from_node.type == 'MATH':
-            m.node_tree.links.remove(s.links[0])
-            s.default_value = 0.0
+            node = s.links[0].from_node
+            constants = [i.default_value for i in node.inputs[:2] if not i.is_linked]
+            if node.operation == 'MULTIPLY' and 0.0 in constants:
+                m.node_tree.links.remove(s.links[0])
+                s.default_value = 0.0
 
 for img in bpy.data.images:
     print('IMG', img.name, tuple(img.size))
 
 bpy.ops.export_scene.gltf(
     filepath=dst, export_format='GLB',
-    export_image_format='JPEG', export_image_quality=95,  # export_jpeg_quality se ignora: salia en calidad 75
+    export_image_format='AUTO', export_image_quality=100,  # export_jpeg_quality se ignora: salia en calidad 75
     # nivel 10 solo cambia como se empaqueta: misma cuantizacion, la malla decodificada es identica bit a bit (-10%)
-    export_draco_mesh_compression_enable=True, export_draco_mesh_compression_level=10,
+    export_draco_mesh_compression_enable=DRACO, export_draco_mesh_compression_level=10,
     export_draco_position_quantization=14, export_draco_normal_quantization=10, export_draco_texcoord_quantization=16,
     export_cameras=False, export_lights=False,
 )
@@ -158,7 +175,7 @@ jpgs = {im['bufferView'] for im in j.get('images', []) if im.get('mimeType') == 
 out = b''
 for i, bv in enumerate(j['bufferViews']):
     data = binc[bv.get('byteOffset', 0):bv.get('byteOffset', 0) + bv['byteLength']]
-    if i in jpgs:
+    if i in jpgs and os.path.isfile(JPEGTRAN):
         data = subprocess.run([JPEGTRAN, '-copy', 'none', '-optimize', '-progressive'], input=data, capture_output=True,
                               check=True).stdout
     out += b'\0' * (-len(out) % 4)

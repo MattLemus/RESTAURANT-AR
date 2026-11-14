@@ -1,0 +1,3 @@
+Pillow>=12.2
+numpy>=2.4
+pycolmap==4.2.1

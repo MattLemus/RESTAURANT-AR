@@ -1,0 +1,7 @@
+# Opcionales para captura/procesar.py y captura/procesar_rs.py.
+# El capturador y su servidor solo necesitan Pillow de requirements.txt.
+Pillow>=12.2
+numpy>=2.4
+scipy>=1.14
+opencv-python-headless>=4.10
+rembg[cpu]>=2.0

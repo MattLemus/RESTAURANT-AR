@@ -2,6 +2,7 @@
 # El modelo de OpenMVS sale torcido, con la mesa y restos del fondo. Lo pone derecho (las fotos rodean el plato en un
 # circulo: su eje es la vertical), corta la mesa y deja solo el plato. make_web_glb.py despues lo centra y le da su
 # ancho real. Tambien avisa si a algun lado del plato le faltan fotos.
+from pathlib import Path
 import json
 import math
 import sys
@@ -12,6 +13,8 @@ import numpy as np
 from mathutils import Matrix, Vector
 
 src, cj, dst = sys.argv[sys.argv.index('--') + 1:][:3]
+if Path(src).resolve() == Path(dst).resolve() or Path(dst).exists():
+    raise ValueError('Salida debe ser nueva: no sobrescribir el maestro')
 bpy.ops.object.select_all(action='SELECT')
 bpy.ops.object.delete()
 # unir los vertices repetidos en las costuras de la textura: si no, cada isla de la textura es una pieza suelta
@@ -54,6 +57,15 @@ print(f'FOTOS {len(cams)}: altura {elev.mean():.0f} grados (de {elev.min():.0f} 
       f'hueco mas grande entre fotos {gaps.max():.0f} grados')
 for i in np.where(gaps > 15)[0]:
     print(f'FALTAN FOTOS entre {az[i]:.0f} y {az[(i + 1) % len(az)]:.0f} grados ({gaps[i]:.0f} grados sin foto)')
+
+# Ruta predeterminada: solo transformación rígida. No eliminar componentes,
+# estimar mesas, cerrar huecos, reemplazar materiales ni recalcular normales.
+if '--limpieza-destructiva' not in sys.argv:
+    before = (len(o.data.vertices), len(o.data.polygons))
+    bpy.ops.export_scene.gltf(filepath=dst, export_format='GLB', export_normals=True,
+                             export_image_format='AUTO', export_cameras=False, export_lights=False)
+    print('GEOMETRÍA Y MATERIALES CONSERVADOS', before, '->', dst)
+    sys.exit(0)
 
 me = o.data
 n = len(me.vertices)

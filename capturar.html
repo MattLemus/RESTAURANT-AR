@@ -3,345 +3,63 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#000000">
-<title>Escanear plato</title>
-<style>
-  :root { --verde: #22c55e; --gris: rgba(255,255,255,.55); --panel: rgba(18,18,18,.92); }
-  * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; background: #000; color: #fff; overflow: hidden;
-    font-family: system-ui, -apple-system, Roboto, sans-serif; -webkit-user-select: none; user-select: none; }
-  body { display: flex; flex-direction: column; }
-  header { padding: max(10px, env(safe-area-inset-top)) 16px 8px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-  header h1 { font-size: 18px; margin: 0 auto 0 0; font-weight: 700; }
-  .chip { font-size: 12px; padding: 4px 9px; border-radius: 99px; background: rgba(255,255,255,.12); color: var(--gris); }
-  .chip.ok { background: rgba(34,197,94,.18); color: #86efac; }
-  /* la caja toma la forma real del video y no recorta nada: lo que se ve es lo que sale en la foto */
-  #vista { position: relative; margin: 0 auto; width: min(100vw, calc((100vh - 230px) * var(--r, .75))); aspect-ratio: var(--ar, 3 / 4); overflow: hidden; border-radius: 14px; background: #111; }
-  video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
-  svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
-  #aro { transition: stroke .3s; }
-  #ultima { position: absolute; right: 8px; bottom: 8px; width: 30%; border: 2px solid #fff; border-radius: 8px; display: none; }
-  #flash { position: absolute; inset: 0; background: #fff; opacity: 0; pointer-events: none; transition: opacity .25s; }
-  #cuenta { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; font-size: 110px; font-weight: 800; text-shadow: 0 4px 24px rgba(0,0,0,.6); }
-  footer { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 10px 16px max(14px, env(safe-area-inset-bottom)); text-align: center; }
-  #msg { font-size: 17px; line-height: 1.35; max-width: 420px; min-height: 2.7em; }
-  #contador { font-size: 13px; color: var(--gris); font-variant-numeric: tabular-nums; }
-  #boton { width: 78px; height: 78px; border-radius: 50%; border: 5px solid #fff; background: var(--verde); color: #fff; font-size: 13px; font-weight: 700; cursor: pointer; }
-  #boton.parar { background: #ef4444; }
-  #boton:disabled { opacity: .4; }
-  /* altura: barra a la izquierda (franja verde = donde debe estar la marca blanca) y cartel arriba */
-  #altura { position: absolute; left: 10px; top: 14%; bottom: 14%; width: 12px; border-radius: 6px; background: rgba(0,0,0,.55); outline: 1px solid rgba(255,255,255,.35); display: none; }
-  #franja { position: absolute; left: 0; right: 0; border-radius: 6px; background: var(--verde); opacity: .85; }
-  #yo { position: absolute; left: -7px; width: 26px; height: 6px; margin-top: -3px; border-radius: 3px; background: #fff; box-shadow: 0 0 0 2px #000; transition: top .1s linear; }
-  #estado { position: absolute; left: 34px; right: 10px; top: 10px; padding: 9px 12px; border-radius: 12px; font-size: 17px; font-weight: 700; text-align: center; background: #f59e0b; color: #000; display: none; }
-  #estado.ok { background: var(--verde); color: #fff; }
-  .aviso { position: fixed; inset: 0; z-index: 5; display: none; align-items: center; justify-content: center; padding: 20px; background: rgba(0,0,0,.78); }
-  .aviso.on { display: flex; }
-  .tarjeta { background: #1c1917; border-radius: 20px; padding: 22px 18px; width: 100%; max-width: 420px; display: grid; gap: 14px; text-align: center; }
-  .tarjeta h2 { margin: 0; font-size: 23px; }
-  .tarjeta p { margin: 0; color: #d6d3d1; font-size: 16px; line-height: 1.4; }
-  .tarjeta svg { justify-self: center; position: static; width: 240px; height: 114px; }
-  .tarjeta button { padding: 14px; border-radius: 12px; border: 0; background: var(--verde); color: #fff; font-size: 17px; font-weight: 700; }
-  @keyframes gira { to { transform: rotate(360deg); } }
-  .gira { transform-origin: 50px 56px; animation: gira 6s linear infinite; }
-  #otro { display: none; padding: 12px 22px; border-radius: 12px; border: 0; background: #fff; color: #000; font-size: 15px; font-weight: 700; }
-</style>
+<meta name="theme-color" content="#0b1311">
+<title>Escanear plato · Restaurant AR</title>
+<link rel="stylesheet" href="captura/capturador.css?v=3">
+<script defer src="captura/calidad.js?v=3"></script>
+<script defer src="captura/capturador.js?v=3"></script>
 </head>
 <body>
-<header>
-  <h1>Escanear plato</h1>
-  <span class="chip" id="chipEnfoque">Enfoque</span>
-  <span class="chip" id="chipBrillo">Brillo</span>
-  <span class="chip" id="chipAltura">Altura</span>
-  <span class="chip" id="chipDestino">…</span>
-</header>
-<div id="vista">
-  <video id="video" playsinline muted autoplay></video>
-  <svg viewBox="0 0 300 400" preserveAspectRatio="none" aria-hidden="true">
-    <defs><mask id="hueco"><rect width="300" height="400" fill="#fff"/><ellipse id="huecoE" cx="150" cy="200" rx="130" ry="100" fill="#000"/></mask></defs>
-    <rect width="300" height="400" fill="rgba(0,0,0,.5)" mask="url(#hueco)"/>
-    <ellipse id="aro" cx="150" cy="200" rx="130" ry="100" fill="none" stroke="#fff" stroke-width="2.5" stroke-dasharray="9 6"/>
-    <g id="marcas"></g>
-  </svg>
-  <div id="altura"><div id="franja"></div><div id="yo"></div></div>
-  <div id="estado" role="status"></div>
-  <img id="ultima" alt="Última foto tomada">
-  <div id="flash"></div>
-  <div id="cuenta"></div>
-</div>
-<footer>
-  <div id="msg">Abriendo la cámara…</div>
-  <div id="contador"></div>
-  <button id="boton" disabled aria-label="Empezar">Empezar</button>
-  <button id="otro">Escanear otro plato</button>
-</footer>
-<div class="aviso" id="aviso"><div class="tarjeta"><h2 id="avisoT"></h2><div id="avisoD"></div><p id="avisoP"></p><button id="avisoB">Entendido</button></div></div>
-<script>
-// 3 vueltas del plato, una por altura del celular. Con una sola altura (las 40 fotos del pollo salieron todas entre
-// 36 y 42 grados, 10-nov) los costados de la comida y el fondo del envase no salen en ninguna foto y quedan rayados.
-// min/max: angulo de la camara hacia abajo (0 = mirando de frente, 90 = desde arriba), medido con el acelerometro.
-const VUELTAS = [
-  { nombre: 'Alta',  min: 58, max: 80, texto: 'Celular alto, mirando el plato casi desde arriba.' },
-  { nombre: 'Media', min: 35, max: 55, texto: 'Celular a media altura, mirando el plato en diagonal.' },
-  { nombre: 'Baja',  min: 12, max: 30, texto: 'Celular bajo, casi a la altura de la mesa, mirando la comida de lado.' },
-];
-// Dos formas de dar la vuelta. En la compu (localhost, por cable): celular quieto y el plato gira. Por internet (el
-// dueno del restaurante, sin base giratoria): el plato quieto en la mesa y el camina alrededor con el celular.
-const CAMINAR = !['localhost', '127.0.0.1'].includes(location.hostname);
-const TOTAL = 34;          // fotos por vuelta: ~50 s cada una (cada foto tarda ~1.5 s en el Honor)
-const MIN_MS = 1200;       // separacion minima entre fotos
-const $ = id => document.getElementById(id);
-const msg = t => { $('msg').textContent = t; };
-const dormir = ms => new Promise(r => setTimeout(r, ms));
-const deVuelta = {};  // numero de foto -> vuelta, para la revision del final
-let k = 0, n = 0, esperando = false, abajo = null, enFranja = true, cambio = 0, sensores = false;
-let track, captura, enMarcha = false, alPC = false, sesion, fotos = [], enviadas = 0, cola = Promise.resolve();
-
-// marquitas alrededor del ovalo: se pintan de verde con cada foto de la vuelta
-const NS = 'http://www.w3.org/2000/svg';
-for (let i = 0; i < TOTAL; i++) {
-  const a = -Math.PI / 2 + i * 2 * Math.PI / TOTAL, c = Math.cos(a), s = Math.sin(a);
-  const l = document.createElementNS(NS, 'line');
-  l.setAttribute('stroke-width', '3'); l.setAttribute('stroke-linecap', 'round');
-  $('marcas').appendChild(l);
-}
-const marcas = [...$('marcas').children];
-
-// El ovalo se aplasta segun la altura: un plato visto de lado se ve mas chato que visto desde arriba
-function ovalo() {
-  const v = VUELTAS[k], ry = Math.max(65, 130 * Math.sin((v.min + v.max) / 2 * Math.PI / 180));
-  $('aro').setAttribute('ry', ry); $('huecoE').setAttribute('ry', ry);
-  marcas.forEach((l, i) => {
-    const a = -Math.PI / 2 + i * 2 * Math.PI / TOTAL, c = Math.cos(a), s = Math.sin(a);
-    l.setAttribute('x1', 150 + 137 * c); l.setAttribute('y1', 200 + (ry + 7) * s);
-    l.setAttribute('x2', 150 + 147 * c); l.setAttribute('y2', 200 + (ry + 17) * s);
-    l.setAttribute('stroke', 'rgba(255,255,255,.35)');
-  });
-  $('franja').style.top = `${100 - v.max / 90 * 100}%`; $('franja').style.height = `${(v.max - v.min) / 90 * 100}%`;
-}
-
-// Vista de costado (a que altura va el celular) y de arriba (el celular quieto, el plato gira)
-function dibujo() {
-  const v = VUELTAS[k], g = (v.min + v.max) / 2, a = g * Math.PI / 180;
-  const cx = 60, cy = 78, r = 50, px = cx - r * Math.cos(a), py = cy - r * Math.sin(a);
-  return `<svg viewBox="0 0 210 100" aria-hidden="true">
-    <path d="M${cx - r} ${cy} A${r} ${r} 0 0 1 ${cx} ${cy - r}" fill="none" stroke="#57534e" stroke-dasharray="3 4"/>
-    <line x1="4" y1="${cy + 4}" x2="116" y2="${cy + 4}" stroke="#a8a29e" stroke-width="2"/>
-    <ellipse cx="${cx}" cy="${cy}" rx="22" ry="4" fill="#e7e5e4"/><ellipse cx="${cx}" cy="${cy - 3}" rx="12" ry="4" fill="#f59e0b"/>
-    <line x1="${px}" y1="${py}" x2="${cx}" y2="${cy - 3}" stroke="#22c55e" stroke-dasharray="2 3"/>
-    <g transform="translate(${px} ${py}) rotate(${g - 90})"><rect x="-4" y="-11" width="8" height="22" rx="2" fill="#fff"/></g>
-    <g transform="translate(110 0)">
-      <g class="${CAMINAR ? 'gira' : ''}"><rect x="45" y="2" width="10" height="16" rx="2" fill="#fff"/>
-        <path d="M50 19 L50 28" stroke="#22c55e" stroke-width="2"/></g>
-      <g class="${CAMINAR ? '' : 'gira'}"><circle cx="50" cy="56" r="${CAMINAR ? 20 : 26}" fill="#e7e5e4"/>
-        <circle cx="50" cy="56" r="${CAMINAR ? 11 : 15}" fill="#f59e0b"/>
-        ${CAMINAR ? '' : '<circle cx="50" cy="36" r="4" fill="#22c55e"/>'}</g>
-    </g></svg>`;
-}
-function mostrarAviso() {
-  const v = VUELTAS[k];
-  ovalo();
-  $('avisoT').textContent = `Vuelta ${k + 1} de ${VUELTAS.length} · ${v.nombre}`;
-  $('avisoD').innerHTML = dibujo();
-  $('avisoP').textContent = v.texto + ' Mueve el celular hasta que la marca blanca entre en la franja verde. Después toca el botón y ' +
-    (CAMINAR ? 'camina una vuelta completa alrededor del plato, despacio y sin tocarlo.' : 'gira el plato una vuelta completa, despacio.');
-  $('aviso').classList.add('on');
-}
-
-// Altura = inclinacion del celular: la gravedad sobre el eje de la camara (el Honor solo tiene acelerometro, alcanza)
-const iOS = /iP(hone|ad|od)/.test(navigator.userAgent);  // en iOS el signo viene al reves
-function deMovimiento(e) {
-  const g = e.accelerationIncludingGravity;
-  if (!g || g.z == null) return;
-  const z = (iOS ? -g.z : g.z) / (Math.hypot(g.x, g.y, g.z) || 1);
-  const ang = Math.asin(Math.max(-1, Math.min(1, z))) * 180 / Math.PI;
-  abajo = abajo == null ? ang : abajo + 0.25 * (ang - abajo);  // suaviza el temblor
-}
-async function pedirSensores() {
-  if (sensores) return;
-  sensores = true;
-  const E = window.DeviceMotionEvent;
-  if (E && E.requestPermission) { try { await E.requestPermission(); } catch (_) {} }
-  addEventListener('devicemotion', deMovimiento);
-}
-// 10 veces por segundo: marca de altura, cartel y boton. Sin sensor no se bloquea nada: queda el dibujo de guia.
-setInterval(() => {
-  const v = VUELTAS[k], hay = abajo != null;
-  const dentro = !hay || (abajo >= v.min && abajo <= v.max);
-  if (dentro !== enFranja) { if (++cambio >= 4) { enFranja = dentro; cambio = 0; } } else cambio = 0;  // sin parpadeo
-  const activo = hay && (esperando || enMarcha), e = $('estado');
-  $('altura').style.display = activo ? 'block' : 'none';
-  e.style.display = activo ? 'block' : 'none';
-  if (sensores) chip('chipAltura', hay ? `Altura ${Math.round(abajo)}°` : 'Sin sensor de altura', hay && enFranja);
-  if (esperando) $('boton').disabled = !enFranja;
-  if (!activo) return;
-  $('yo').style.top = `${100 - Math.max(0, Math.min(90, abajo)) / 90 * 100}%`;
-  e.classList.toggle('ok', enFranja);
-  e.textContent = enFranja ? (enMarcha ? '✓ Altura correcta' : '✓ Altura correcta · toca el botón')
-    : (abajo < v.min ? '↑ Sube el celular e inclínalo hacia el plato' : '↓ Baja el celular') + (enMarcha ? ' · fotos en pausa' : '');
-}, 100);
-
-function chip(id, texto, ok) { $(id).textContent = texto; $(id).classList.toggle('ok', !!ok); }
-
-async function abrirCamara() {
-  try {
-    const st = await navigator.mediaDevices.getUserMedia({ audio: false,
-      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1440 }, aspectRatio: { ideal: 4 / 3 } } });
-    track = st.getVideoTracks()[0];
-    const v = $('video');
-    v.onloadedmetadata = () => {
-      $('vista').style.setProperty('--r', v.videoWidth / v.videoHeight);
-      $('vista').style.setProperty('--ar', `${v.videoWidth} / ${v.videoHeight}`);
-    };
-    v.srcObject = st;
-    if ('ImageCapture' in window) captura = new ImageCapture(track);
-  } catch (e) {
-    msg('No pude abrir la cámara. Dale permiso de cámara a esta página y recárgala.');
-    return;
-  }
-  // Si la pagina viene de la compu (servidor local), las fotos se mandan directo alla
-  try { alPC = (await fetch('subir/ping', { cache: 'no-store' })).ok; } catch (e) { alPC = false; }
-  chip('chipDestino', alPC ? 'Fotos → compu' : 'Fotos → celular', alPC);
-  mostrarAviso();
-}
-
-// Todo automatico. En el Honor, trabar el enfoque dejo las fotos borrosas y trabar el brillo (aun sin pedir ISO) las dejo
-// casi negras con ISO 100, aunque la vista previa se veia bien (9-nov). Con el celular quieto y el plato girando, la escena
-// casi no cambia, asi que el automatico da fotos parejas.
-async function preparar() {
-  const caps = track.getCapabilities ? track.getCapabilities() : {};
-  for (const [k, v] of [['focusMode', 'continuous'], ['exposureMode', 'continuous'], ['whiteBalanceMode', 'continuous']])
-    if (caps[k] && caps[k].includes(v)) { try { await track.applyConstraints({ advanced: [{ [k]: v }] }); } catch (e) {} }
-  chip('chipEnfoque', 'Enfoque automático ✓', true);
-  chip('chipBrillo', 'Brillo automático ✓', true);
-}
-
-let ajustesFoto;
-async function sacarFoto() {
-  if (captura) {
-    try {
-      if (ajustesFoto === undefined) {
-        // en el Honor salieron cuadradas (3000x3000): se pide el lado largo como ancho para buscar las de 4000x3000
-        try { const pc = await captura.getPhotoCapabilities(), a = pc.imageWidth.max, b = pc.imageHeight.max;
-              ajustesFoto = { imageWidth: Math.max(a, b), imageHeight: Math.min(a, b) }; }
-        catch (e) { ajustesFoto = null; }
-      }
-      return await captura.takePhoto(ajustesFoto || undefined);
-    } catch (e) { captura = null; }  // este celular no deja: seguimos con el cuadro del video
-  }
-  const v = $('video'), c = document.createElement('canvas');
-  c.width = v.videoWidth; c.height = v.videoHeight;
-  c.getContext('2d').drawImage(v, 0, 0);
-  return await new Promise(r => c.toBlob(r, 'image/jpeg', 0.95));
-}
-
-function enviar(blob, n) {
-  cola = cola.then(async () => {
-    for (let intento = 0; intento < 3; intento++) {
-      try {
-        const r = await fetch(`subir?s=${sesion}&n=${n}`, { method: 'POST', body: blob });
-        if (r.ok) { enviadas++; return; }
-      } catch (e) {}
-      await dormir(800);
-    }
-    fotos.push({ blob, n });  // no llego a la compu: se guarda en el celular al final
-  });
-}
-
-function estampa() {
-  const d = new Date(), p = x => String(x).padStart(2, '0');
-  return `plato_${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
-}
-
-async function empezar() {
-  enMarcha = true; esperando = false;
-  $('boton').disabled = true;
-  if (!sesion) {
-    sesion = estampa(); fotos = []; enviadas = 0;
-    try { await navigator.wakeLock.request('screen'); } catch (e) {}
-    msg('Preparando la cámara…');
-    await preparar();
-  }
-  $('cuenta').style.display = 'flex';
-  for (const c of [3, 2, 1]) { $('cuenta').textContent = c; await dormir(800); }
-  $('cuenta').style.display = 'none';
-  $('boton').textContent = 'Terminar'; $('boton').classList.add('parar'); $('boton').disabled = false;
-  $('aro').setAttribute('stroke', 'var(--verde)');
-  msg(CAMINAR ? 'Camina despacio alrededor del plato, siempre dentro del óvalo. Termina la vuelta justo cuando se llenen las marcas.'
-    : 'Gira el plato despacio una vuelta completa. Si la mano no da más, suéltalo, agárralo de nuevo y sigue.');
-  let hechas = 0;
-  while (enMarcha && hechas < TOTAL) {
-    if (!enFranja) { await dormir(150); continue; }  // fuera de altura: no se saca la foto, el cartel dice que hacer
-    const t0 = performance.now();
-    const blob = await sacarFoto();
-    if (!blob) continue;
-    n++; hechas++; deVuelta[n] = k;
-    $('flash').style.opacity = .55; setTimeout(() => { $('flash').style.opacity = 0; }, 90);
-    if (navigator.vibrate) navigator.vibrate(25);
-    marcas[hechas - 1].setAttribute('stroke', '#22c55e');
-    const u = $('ultima');  // la foto real, por si la vista previa no coincide con ella
-    if (u.src) URL.revokeObjectURL(u.src);
-    u.src = URL.createObjectURL(blob); u.style.display = 'block';
-    $('contador').textContent = `Vuelta ${k + 1} de ${VUELTAS.length} · ${hechas} de ${TOTAL} fotos`;
-    if (alPC) enviar(blob, n); else fotos.push({ blob, n });
-    const resto = MIN_MS - (performance.now() - t0);
-    if (resto > 0) await dormir(resto);
-  }
-  const cortada = !enMarcha;
-  enMarcha = false;
-  $('aro').setAttribute('stroke', '#fff');
-  if (cortada || k + 1 === VUELTAS.length) return terminar(n);
-  k++;
-  if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
-  $('boton').textContent = 'Seguir'; $('boton').classList.remove('parar'); $('boton').disabled = true;
-  msg(`Vuelta ${k} lista ✓`);
-  mostrarAviso();
-}
-
-async function terminar(n) {
-  $('boton').style.display = 'none';
-  if (alPC) {
-    const t = setInterval(() => msg(`Mandando a la compu… ${enviadas} de ${n}`), 300);
-    await cola; clearInterval(t);
-  }
-  if (fotos.length) {
-    msg(`Guardando ${fotos.length} fotos en el celular (carpeta Descargas)…`);
-    for (const f of fotos) {
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(f.blob); a.download = `${sesion}_${String(f.n).padStart(3, '0')}.jpg`;
-      document.body.appendChild(a); a.click(); a.remove();
-      await dormir(350);
-    }
-  }
-  if (alPC && !fotos.length) {
-    msg('Revisando las fotos…');
-    let r = null;
-    try { r = await (await fetch(`subir/revisar?s=${sesion}`, { cache: 'no-store' })).json(); } catch (e) {}
-    if (r) {
-      // por vuelta: fotos que llegaron y no salieron movidas. Hacen falta 3 de cada 4 para que el plato salga entero
-      const buenas = VUELTAS.map((_, j) => r.fotos.filter(x => deVuelta[x] === j && !r.movidas.includes(x)).length);
-      const mal = VUELTAS.map((v, j) => ({ v, b: buenas[j] })).filter(x => x.b < 0.75 * TOTAL);
-      $('otro').style.display = 'block';
-      if (!mal.length) return msg(`✓ Quedó bien: ${r.fotos.length} fotos, las 3 alturas completas. Ya puedes retirar el plato.`);
-      $('otro').textContent = 'Repetir el escaneo';
-      return msg('✗ Hay que repetirlo. ' + mal.map(x => `Vuelta ${x.v.nombre.toLowerCase()}: ` +
-        (x.b ? `solo ${x.b} de ${TOTAL} fotos sirven` : 'no se hizo')).join('; ') + '. Muévete más despacio y completa las 3 vueltas.');
-    }
-  }
-  msg(alPC && !fotos.length ? `¡Listo! ${n} fotos ya están en la compu ✓` :
-      `¡Listo! ${n} fotos. ${enviadas ? enviadas + ' en la compu y ' : ''}${fotos.length} en Descargas: pásalas a Movies.`);
-  $('otro').style.display = 'block';
-}
-
-$('boton').onclick = () => { if (enMarcha) { enMarcha = false; $('boton').disabled = true; } else empezar(); };
-$('otro').onclick = () => location.reload();
-$('avisoB').onclick = () => {
-  $('aviso').classList.remove('on');
-  pedirSensores();
-  esperando = true; $('boton').disabled = !enFranja;
-  msg(`Vuelta ${k + 1} de ${VUELTAS.length} · ${VUELTAS[k].nombre}: pon el plato dentro del óvalo, bien cerca, y toca el botón cuando esté verde.`);
-};
-abrirCamara();
-</script>
+<main>
+  <header><h1>Escanear plato</h1><span id="offline">Preparando modo sin cable…</span></header>
+  <div id="zones" aria-label="Alturas del escaneo"></div>
+  <section id="view" aria-label="Cámara y guía de captura">
+    <video id="video" autoplay muted playsinline></video>
+    <svg viewBox="0 0 300 400" preserveAspectRatio="none" class="guide" aria-hidden="true">
+      <ellipse id="oval" cx="150" cy="200" rx="118" ry="102" fill="none" stroke="#71f5ad" stroke-width="2.5" stroke-dasharray="8 5" vector-effect="non-scaling-stroke"/>
+      <g id="dots"></g>
+    </svg>
+    <div class="view-top">
+      <span id="zone"></span>
+      <div id="angle" class="angle">
+        <svg viewBox="0 0 36 32" aria-hidden="true"><path d="M3 27h30" stroke="currentColor" stroke-width="2"/><path id="angleNeedle" d="M5 26h24" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>
+        <div><strong id="angleTitle">Guía de altura</strong><small id="height"></small></div>
+      </div>
+    </div>
+    <img id="last" hidden alt="Última foto tomada">
+    <div id="orbit">
+      <p id="msg" role="status" aria-live="polite">Preparando cámara…</p>
+      <div id="orbitHint"></div>
+      <progress id="stability" max="1" value="0" aria-label="Estabilidad antes del disparo"></progress>
+      <button id="confirm" type="button" hidden>Ya cambié de posición</button>
+    </div>
+  </section>
+  <p id="hint" class="muted"></p>
+  <section id="captureControls" aria-label="Controles de captura">
+    <label class="plan">Guía para una vuelta <select id="plan"><option value="15">15 posiciones</option><option value="24" selected>24 posiciones</option><option value="34">34 posiciones</option></select></label>
+    <label class="framing"><input type="checkbox" id="framing"> El plato completo está dentro del óvalo</label>
+    <div class="actions"><button id="start" class="primary" disabled>Empezar</button><button id="next" disabled>Pasar a diagonal</button></div>
+    <div class="actions"><button id="finish" class="quiet" disabled>Listo, terminar captura</button><button id="repeat" class="quiet" disabled>Repetir última</button></div>
+  </section>
+  <section id="delivery" hidden>
+    <h2>Escaneo listo</h2>
+    <p id="coverage"></p>
+    <p>Conecta el celular por USB, abre <strong>ABRIR_ESCANER.bat</strong> en la PC y toca el botón de abajo.</p>
+    <div class="actions"><button id="process" class="primary">Enviar y generar 3D</button><button id="resumeCapture">Volver a capturar</button></div>
+    <p id="jobStatus" role="status" aria-live="polite"></p>
+    <a id="downloadModel" hidden>Descargar modelo 3D</a>
+  </section>
+  <p id="counter" class="muted"></p>
+  <details><summary>Fotos y ajustes</summary>
+    <p id="destination"></p><small id="session"></small>
+    <p id="quality" class="muted"></p><p id="camera" class="muted"></p>
+    <label>Movimiento <select id="mode"><option value="walk">Caminar alrededor del plato</option><option value="turntable">Girar la base</option></select></label>
+    <label><input id="useTilt" type="checkbox" checked> Usar el sensor para guiar la inclinación</label>
+    <label><input id="useCompass" type="checkbox" checked> Usar el sensor para guiar la vuelta</label>
+    <div class="actions wrap"><button id="import" disabled>Importar foto original</button><button id="review">Revisar fotos</button><button id="manifest">Descargar informe</button><button id="resend">Copiar a la PC</button><button id="new">Nueva sesión</button></div>
+    <input id="file" type="file" accept="image/jpeg,image/png" capture="environment" hidden>
+    <img id="reviewImage" hidden alt="Original seleccionado para revisión"><div id="gallery"></div>
+  </details>
+</main>
 </body>
 </html>
