@@ -13,6 +13,46 @@ bpy.ops.object.delete()
 bpy.ops.import_scene.gltf(filepath=src)
 
 meshes = [o for o in bpy.context.scene.objects if o.type == 'MESH']
+
+
+def orientar_caras(o):
+    """Quick Look ilumina la cara de atras con la normal guardada (Android la invierte solo): las caras al reves de un
+    escaneo salen negras o como espejo (16-11, fondo del plato y carne). Se voltea cada cara cuyo lado de atras esta mas
+    despejado que el de adelante, contando rayos que escapan sin chocar con el plato."""
+    from mathutils import Vector
+    from mathutils.bvhtree import BVHTree
+    me = o.data
+    bvh = BVHTree.FromPolygons([v.co for v in me.vertices], [p.vertices for p in me.polygons])
+    sesgos = [Vector((0, 0, 0))] + [Vector(d) * 0.6 for d in ((1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1))]
+
+    def libres(c, n):
+        k = 0
+        for s in sesgos:
+            d = n + s
+            if d.dot(n) <= 0.1:
+                continue
+            d.normalize()
+            if bvh.ray_cast(c + d * 1e-4, d, 2.0)[0] is None:
+                k += 1
+        return k
+
+    voltear = [p.index for p in me.polygons
+               if libres(p.center, -p.normal) > libres(p.center, p.normal)]
+    if not voltear:
+        return 0
+    normales = {(p.index, me.loops[li].vertex_index): me.corner_normals[li].vector.copy()
+                for p in me.polygons for li in p.loop_indices}
+    flip = set(voltear)
+    for i in voltear:
+        me.polygons[i].flip()
+    me.normals_split_custom_set([(-normales[(p.index, me.loops[li].vertex_index)] if p.index in flip
+                                  else normales[(p.index, me.loops[li].vertex_index)])
+                                 for p in me.polygons for li in p.loop_indices])
+    return len(voltear)
+
+
+for o in meshes:
+    print('VOLTEADAS', o.name, orientar_caras(o), 'de', len(o.data.polygons))
 for o in meshes:
     xs = [(o.matrix_world @ v.co) for v in o.data.vertices]
     print('MESH', o.name, len(o.data.polygons), 'tris',
