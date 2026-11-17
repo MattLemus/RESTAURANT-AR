@@ -17,38 +17,47 @@ meshes = [o for o in bpy.context.scene.objects if o.type == 'MESH']
 
 def orientar_caras(o):
     """Quick Look ilumina la cara de atras con la normal guardada (Android la invierte solo): las caras al reves de un
-    escaneo salen negras o como espejo (16-11, fondo del plato y carne). Se voltea cada cara cuyo lado de atras esta mas
-    despejado que el de adelante, contando rayos que escapan sin chocar con el plato."""
+    escaneo salen negras o como espejo (16-11, fondo del plato y carne). Cada cara debe mirar hacia donde la ve la
+    gente: se lanzan rayos hacia puntos de vista alrededor del plato (sobre todo desde arriba, como en AR) y la normal
+    guardada y el orden de vertices se voltean, cada uno por su lado, si miran mas lejos que hacia esos puntos de vista."""
+    import math
     from mathutils import Vector
     from mathutils.bvhtree import BVHTree
     me = o.data
-    bvh = BVHTree.FromPolygons([v.co for v in me.vertices], [p.vertices for p in me.polygons])
-    sesgos = [Vector((0, 0, 0))] + [Vector(d) * 0.6 for d in ((1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1))]
-
-    def libres(c, n):
-        k = 0
-        for s in sesgos:
-            d = n + s
-            if d.dot(n) <= 0.1:
-                continue
-            d.normalize()
+    mw = o.matrix_world
+    rot = mw.to_3x3().normalized()
+    bvh = BVHTree.FromPolygons([mw @ v.co for v in me.vertices], [p.vertices for p in me.polygons])
+    vistas = []  # (direccion hacia quien mira, peso): desde abajo solo se mira girando el plato en modo Objeto
+    for el, azs, peso in ((10, 8, 1), (30, 8, 1), (55, 8, 1), (80, 8, 1), (90, 1, 1), (-35, 4, .3), (-75, 4, .3), (-90, 1, .3)):
+        for k in range(azs):
+            e, a = math.radians(el), 2 * math.pi * k / azs
+            vistas.append((Vector((math.cos(e) * math.cos(a), math.cos(e) * math.sin(a), math.sin(e))), peso))
+    cn = me.corner_normals
+    normales = [cn[li].vector.copy() for li in range(len(me.loops))]
+    orden, luz = [], set()
+    for p in me.polygons:
+        c = mw @ p.center
+        w = rot @ p.normal
+        ns = Vector((0, 0, 0))
+        for li in p.loop_indices:
+            ns += normales[li]
+        ns = rot @ ns
+        sw = sn = 0.0
+        for d, peso in vistas:
             if bvh.ray_cast(c + d * 1e-4, d, 2.0)[0] is None:
-                k += 1
-        return k
-
-    voltear = [p.index for p in me.polygons
-               if libres(p.center, -p.normal) > libres(p.center, p.normal)]
-    if not voltear:
-        return 0
-    normales = {(p.index, me.loops[li].vertex_index): me.corner_normals[li].vector.copy()
+                sw += peso * w.dot(d)
+                sn += peso * ns.dot(d)
+        if sw < 0:
+            orden.append(p.index)
+        if sn < 0:
+            luz.add(p.index)
+    por_cara = {(p.index, me.loops[li].vertex_index): -normales[li] if p.index in luz else normales[li]
                 for p in me.polygons for li in p.loop_indices}
-    flip = set(voltear)
-    for i in voltear:
+    for i in orden:
         me.polygons[i].flip()
-    me.normals_split_custom_set([(-normales[(p.index, me.loops[li].vertex_index)] if p.index in flip
-                                  else normales[(p.index, me.loops[li].vertex_index)])
+    me.normals_split_custom_set([por_cara[(p.index, me.loops[li].vertex_index)]
                                  for p in me.polygons for li in p.loop_indices])
-    return len(voltear)
+    return len(orden), len(luz)
 
 
 for o in meshes:
@@ -75,6 +84,11 @@ for o in meshes:
             if mn.operation == 'MULTIPLY' and 0.0 in consts:
                 m.node_tree.links.remove(s.links[0])
                 s.default_value = 0.0
+        # sin barniz, como el ribeye y la picanha que se ven bien en iPhone (el plato del churrasco traia clearcoat 1)
+        s = bsdf.inputs['Coat Weight']
+        for l in list(s.links):
+            m.node_tree.links.remove(l)
+        s.default_value = 0.0
         for name in ('Base Color', 'Roughness', 'Metallic', 'Normal'):
             s = bsdf.inputs[name]
             print('  INPUT', name, 'linked' if s.is_linked else s.default_value,
