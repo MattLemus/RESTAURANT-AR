@@ -338,8 +338,9 @@ loader.load(q.get('glb'), (g) => {
     // Un plato escaneado (?glb=) ya trae la luz real en sus fotos: sin luces ni tinte, igual que en la camara (con el tinte crema y
     // las luces salia verde y oscuro, 31-10)
     const m = o.material
-    o.material = q.get('glb') && !q.get('tint') ? new THREE.MeshBasicMaterial({map: m.map, toneMapped: false})
-      : new THREE.MeshLambertMaterial({map: m.map, normalMap: m.normalMap, color: q.get('tint') ? '#' + q.get('tint') : 0xffecd8})
+    // side: respeta el doubleSided del GLB; con solo el frente, las caras al reves (plato hecho a mano) se veian transparentes
+    o.material = q.get('glb') && !q.get('tint') ? new THREE.MeshBasicMaterial({map: m.map, side: m.side, toneMapped: false})
+      : new THREE.MeshLambertMaterial({map: m.map, normalMap: m.normalMap, normalScale: m.normalScale, side: m.side, color: q.get('tint') ? '#' + q.get('tint') : 0xffecd8})
     m.dispose()
   })
   // los programas de la GPU se preparan antes de mostrar el plato: compilarlos al aparecer trababa ese primer cuadro
