@@ -140,7 +140,7 @@ function positionCheck(target, preview, now) {
   if (hasCompass) {
     const result=Q.orbitTarget(angle,origin.heading,target.position,engine.ringPlans[target.ring],prior?.heading);
     if (!result.ready) {
-      const direction=result.offset < -3.5 ? 'Retrocede un poco.' : '↻ Avanza alrededor del plato.';
+      const direction=result.offset < -result.tolerance ? 'Retrocede un poco.' : '↻ Avanza alrededor del plato.';
       return {message:direction,hint:direction,confirm:false};
     }
   } else if (!confirmed) {
@@ -244,10 +244,8 @@ async function storePhoto(blob,fromManual=false) {
   if(records.some(r=>r.valid && !r.superseded && Q.difference(m.signature,r.metrics.signature)<1.8))reason='Fotografía casi idéntica: avanza a otro ángulo y repite esta posición';
   const preview=previous;
   if(!fromManual && preview && m.sharpness<preview.sharpness*.35)reason='La fotografía real perdió nitidez respecto a la vista previa';
-  const requested=cameraInfo.requestedPhotoSettings;
-  if(!fromManual && requested?.imageWidth && requested?.imageHeight && width*height<requested.imageWidth*requested.imageHeight) {
-    reason='La cámara entregó menos resolución de la solicitada. Repite o importa una foto original en resolución máxima';
-  }
+  // Sin rechazo por "menos de lo pedido": Chrome en Honor X8b siempre entrega 3000x3000 aunque pida 4000x3000;
+  // el mínimo real (5 MP, 2400 px) ya se exige arriba y el aviso de abajo informa la diferencia.
   const sequence=Math.max(0,...records.map(r=>r.sequence))+1;
   const record={id:session+':'+sequence,session,sequence,ring:target.ring,position:target.position,valid:!reason,reason,width,height,bytes:blob.size,mime:blob.type,metrics:m,manual:fromManual,approximatePosition:true,positionConfirmed:confirmed,heading:fromManual?null:shotHeading,previewSignature:fromManual?null:preview?.signature,time:new Date().toISOString(),uploaded:false};
   // La transacción debe completar ANTES de aceptar el objetivo. El blob se guarda sin recodificar.
@@ -274,7 +272,9 @@ async function loop() {
     if(!initialized || busy || document.hidden || !['GUIDING','STABILIZING'].includes(engine.state))return;
     const now=performance.now();if(!$('video').videoWidth)return;
     if($('video').paused || $('video').readyState<2 || track.readyState!=='live' || track.muted){engine.tick(now,false);say('Cámara detenida: vuelve a abrirla antes de continuar.');return;}
-    const m=metrics($('video')), gap=now-lastFrameTime;lastFrameTime=now;
+    // Reducir en GPU: drawImage del video completo tarda ~300 ms en el Honor y nunca pasa el límite de 350 ms.
+    const frame=await createImageBitmap($('video'),{resizeWidth:320,resizeHeight:240,resizeQuality:'low'});
+    const m=metrics(frame), gap=now-lastFrameTime;lastFrameTime=now;frame.close();
     const delta=Q.difference(m.signature,previous?.signature);previous=m;
     const t=engine.target();if(!t)return;const sensor=tilt!==null && now-sensorTime<1500;
     const anglePrompt=updateAngle(t.ring,now);
@@ -285,8 +285,9 @@ async function loop() {
     $('confirm').hidden=!position.confirm || Boolean(reason);
     $('orbitHint').textContent=reason ? '' : position.hint;
     if(!reason)reason=position.message;
-    if(!reason && (delta>4 || (sensor && rotation>8) || gap>350))reason='Mantén el celular quieto';
-    if(!reason && holdSignature && Q.difference(m.signature,holdSignature)>5)reason='Mantén el celular quieto';
+    // Medido en Honor X8b en la mano: 1.4-6 quieto, 10-35 al moverse (firma por celdas).
+    if(!reason && (delta>8 || (sensor && rotation>8) || gap>350))reason='Mantén el celular quieto';
+    if(!reason && holdSignature && Q.difference(m.signature,holdSignature)>8)reason='Mantén el celular quieto';
     if(!reason && !holdSignature)holdSignature=m.signature;
     if(!reason && !stableBaseline)stableBaseline=m.sharpness;
     if(!reason && m.sharpness<stableBaseline*.65)reason='Buscando enfoque';

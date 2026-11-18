@@ -1,6 +1,6 @@
 const {test}=require('node:test');
 const assert=require('node:assert/strict');
-const {analyze,assess,difference,CaptureState}=require('../captura/calidad.js');
+const {analyze,assess,difference,orbitTarget,CaptureState}=require('../captura/calidad.js');
 function frame(value,pattern=false){const a=new Uint8ClampedArray(320*240*4);for(let y=0;y<240;y++)for(let x=0;x<320;x++){const i=(y*320+x)*4,v=pattern?80+((Math.floor(x/4)+Math.floor(y/4))%2)*100:value;a[i]=a[i+1]=a[i+2]=v;a[i+3]=255;}return analyze(a,320,240);}
 test('requiere al menos 1000ms continuos antes de disparar',()=>{const s=new CaptureState();s.resume();for(let t=0;t<1000;t+=100)assert.equal(s.tick(t,true),false);assert.equal(s.tick(1000,true),true);assert.equal(s.state,'CAPTURING');assert.equal(s.tick(1100,true),false);});
 test('movimiento reinicia el segundo completo',()=>{const s=new CaptureState();s.resume();for(let t=0;t<=800;t+=100)s.tick(t,true);s.tick(900,false);for(let t=1000;t<2000;t+=100)assert.equal(s.tick(t,true),false);assert.equal(s.tick(2000,true),true);});
@@ -12,4 +12,6 @@ test('completa exactamente todos los objetivos aceptados',()=>{const s=new Captu
 test('rechaza escenas negras, quemadas y lisas',()=>{assert.match(assess(frame(5)),/luz/);assert.match(assess(frame(253)),/luz/);assert.match(assess(frame(125)),/encuadre/);});
 test('textura expuesta produce varias métricas útiles',()=>{const m=frame(0,true);assert.equal(assess(m),null);assert.ok(m.sharpness>100);assert.ok(m.contrast>20);assert.ok(m.edge>3);});
 test('duplicado tolera cambios globales de brillo',()=>{const a=[30,80,120,60];assert.equal(difference(a,a.map(v=>v+20)),0);assert.ok(difference(a,[120,30,60,80])>20);});
+test('firma por celdas ignora un temblor de 2 px pero no un cambio de escena',()=>{const f=(dx,big=0)=>{const a=new Uint8ClampedArray(320*240*4);for(let y=0;y<240;y++)for(let x=0;x<320;x++){const i=(y*320+x)*4;a[i]=a[i+1]=a[i+2]=big?(x<160?40:200):80+((Math.floor((x+dx)/4)+Math.floor(y/4))%2)*100;a[i+3]=255;}return analyze(a,320,240).signature;};assert.ok(difference(f(0),f(2))<4);assert.ok(difference(f(0),f(0,1))>20);});
+test('cada posición acepta su franja (24 → ±7.5°) y pide retroceder solo si se pasó',()=>{assert.equal(orbitTarget(320,341.6,1,24,341.6).ready,true);const over=orbitTarget(317,341.6,1,24,341.6);assert.equal(over.ready,false);assert.ok(over.offset<-over.tolerance);assert.equal(orbitTarget(336,341.6,1,24,341.6).ready,false);});
 test('no acepta fotografías fuera del estado de captura',()=>{const s=new CaptureState();assert.throws(()=>s.result(true,{}),/estado/);assert.equal(s.accepted.size,0);});

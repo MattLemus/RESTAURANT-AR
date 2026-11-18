@@ -9,14 +9,16 @@
     const gray = new Float32Array(width * height);
     for (let i = 0; i < gray.length; i++) gray[i] = .299 * rgba[i*4] + .587 * rgba[i*4+1] + .114 * rgba[i*4+2];
     let sum=0, square=0, lap=0, lap2=0, edges=0, dark=0, bright=0, count=0;
-    const signature=[];
     for (let y=1; y<height-1; y++) for (let x=1; x<width-1; x++) {
       if (((x-width/2)/(.43*width))**2 + ((y-height/2)/(.35*height))**2 > 1) continue;
       const i=y*width+x, v=gray[i], l=gray[i-1]+gray[i+1]+gray[i-width]+gray[i+width]-4*v;
       sum+=v; square+=v*v; lap+=l; lap2+=l*l; edges+=Math.abs(gray[i+1]-gray[i-1])+Math.abs(gray[i+width]-gray[i-width]);
       dark+=v<18; bright+=v>246; count++;
     }
-    for(let y=0;y<12;y++) for(let x=0;x<16;x++) signature.push(gray[Math.floor((y+.5)*height/12)*width+Math.floor((x+.5)*width/16)]);
+    // Promedio por celda 16x12: un píxel suelto cambia con el pulso de la mano y el ruido aunque el celular esté quieto.
+    const cells=new Float64Array(192);
+    for (let y=0; y<height; y++) for (let x=0; x<width; x++) cells[Math.floor(y*12/height)*16+Math.floor(x*16/width)]+=gray[y*width+x];
+    const signature=Array.from(cells, v => v*192/(width*height));
     const mean=sum/count;
     return {mean, contrast:Math.sqrt(Math.max(0,square/count-mean*mean)), sharpness:lap2/count-(lap/count)**2,
       edge:edges/count, dark:dark/count, bright:bright/count, signature};
@@ -47,7 +49,9 @@
     const expected = (origin - position * 360 / total + 360) % 360;
     const offset = angleDifference(heading, expected);
     const advanced = !Number.isFinite(previousHeading) || angleDifference(previousHeading, heading) >= 6;
-    return { offset, ready: Math.abs(offset) <= 3.5 && advanced };
+    // Cada posición acepta su franja completa: ±3.5° era imposible a pulso (brújula del Honor se mueve ~7° quieto).
+    const tolerance = 180 / total;
+    return { offset, tolerance, ready: Math.abs(offset) <= tolerance && advanced };
   }
   class CaptureState {
     constructor(total=34, rings=3) { this.total=total; this.rings=rings; this.accepted=new Map(); this.state='PAUSED'; this.reset(); }

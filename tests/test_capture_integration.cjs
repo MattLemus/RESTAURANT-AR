@@ -55,9 +55,9 @@ test('tras 15 fotos altas se puede pasar a diagonal, luego a baja y terminar',()
   assert.equal(h.run("$('delivery').hidden"),false);
   assert.equal(h.run("JSON.parse(stages.get('guided-stage:'+session)).finished"),true);
 });
-test('la foto automática de menor resolución queda fuera de la reconstrucción',async()=>{
+test('foto automática menor a la pedida pero sobre el mínimo se acepta y se avisa',async()=>{
   const h=harness();
   await h.run("cameraInfo.requestedPhotoSettings={imageWidth:4000,imageHeight:3000};storePhoto(new Blob(['native']),false)");
-  assert.equal(h.saved[0].valid,false);
-  assert.match(h.saved[0].reason,/menos resolución/);
+  assert.equal(h.saved[0].valid,true);
+  assert.match(h.run("$('camera').textContent"),/menos píxeles/);
 });
