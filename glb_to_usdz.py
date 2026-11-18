@@ -73,8 +73,18 @@ for o in meshes:
         nodes = m.node_tree.nodes
         bsdf = next((n for n in nodes if n.type == 'BSDF_PRINCIPLED'), None)
         if bsdf is None:
-            print('Material sin Principled: revisar apariencia en Quick Look', m.name)
-            continue
+            # los escaneos (OpenMVS) llegan sin luz (KHR_materials_unlit) y el exportador USD solo saca la textura de un
+            # Principled: sin esto el USDZ salia sin textura y Quick Look mostraba el plato gris (prueba-5060, 17-11)
+            tex = next((n for n in nodes if n.type == 'TEX_IMAGE' and n.image), None)
+            out = next((n for n in nodes if n.type == 'OUTPUT_MATERIAL'), None)
+            if tex is None or out is None:
+                print('Material sin Principled ni textura: revisar apariencia en Quick Look', m.name)
+                continue
+            bsdf = nodes.new('ShaderNodeBsdfPrincipled')
+            m.node_tree.links.new(tex.outputs['Color'], bsdf.inputs['Base Color'])
+            bsdf.inputs['Roughness'].default_value = 1.0  # comida mate, sin brillo de plastico
+            m.node_tree.links.new(bsdf.outputs['BSDF'], out.inputs['Surface'])
+            print('SIN LUZ -> Principled con la textura', tex.image.name, m.name)
         # glTF metallicFactor 0 llega como textura x 0 (nodo MATH); el exportador USD
         # ignora ese nodo y usaria la textura sola, asi que se fija metalico = 0
         s = bsdf.inputs['Metallic']
