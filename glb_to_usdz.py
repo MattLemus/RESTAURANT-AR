@@ -11,6 +11,9 @@ if Path(src).resolve() == Path(dst).resolve() or Path(dst).exists():
 bpy.ops.object.select_all(action='SELECT')
 bpy.ops.object.delete()
 bpy.ops.import_scene.gltf(filepath=src)
+# prueba_3d_local.py nombra la textura con su ruta completa (C:/.../prueba_3d_0) y el exportador USD no la puede escribir: USDZ gris
+for img in bpy.data.images:
+    img.name = Path(img.name).name
 
 meshes = [o for o in bpy.context.scene.objects if o.type == 'MESH']
 
