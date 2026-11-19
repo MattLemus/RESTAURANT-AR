@@ -17,18 +17,19 @@
 <!-- Cada celular usa lo mejor que soporte: iPhone = Quick Look (ARKit) con churrasco.usdz; Android con ARCore = Scene Viewer (ARCore);
      el resto = ar.html (giroscopio, como Snapchat sin ARCore). WebXR en Chrome fallaba en celulares con ARCore y caia al giroscopio.
      iPhone usa el enlace nativo de Apple (#ql), no el de model-viewer: su deteccion fallo en un iPhone con iOS 26 y lo mandaba al giroscopio.
-     churrasco.usdz sale de churrasco.glb con Blender (glb_to_usdz.py): 30 cm, Y arriba, metros. -->
-<model-viewer src="churrasco.glb"
+     churrasco.usdz sale de churrasco.glb con Blender (glb_to_usdz.py): 20 cm (el churrasco de 72 fotos del 15-11), Y arriba, metros.
+     ?v=2 = version del 19-11 (SAM + color parejo + relleno de lo que no ve ninguna foto; Safari y Pages guardan copia unos 10 min). -->
+<model-viewer src="churrasco.glb?v=2"
   camera-controls tone-mapping="neutral" shadow-intensity="1"
   alt="Churrasco"
   style="width:100%;height:80vh">
 </model-viewer>
 <div style="text-align:center">
-  <a id="slam" class="cta" href="ar.html?glb=churrasco.glb&tint=ffecd8">Ver en mi mesa (AR)</a>
+  <a id="slam" class="cta" href="ar.html?glb=churrasco.glb%3Fv%3D2&tint=ffecd8">Ver en mi mesa (AR)</a>
   <!-- Safari abre Quick Look solo si el enlace tiene rel="ar" y una <img> como unico elemento hijo (el texto si se permite).
        shortcut: en navegadores dentro de apps (Instagram, Facebook) Quick Look no existe y solo se abre el archivo; si hace falta, mandarlos al giroscopio -->
   <!-- allowsContentScaling=0: sin pellizco, el plato queda a tamano real. El aviso "View in AR?" lo pone Safari siempre (WebKit), no se puede quitar -->
-  <a id="ql" class="cta" rel="ar" href="churrasco.usdz#allowsContentScaling=0&custom=https://mattlemus.github.io/RESTAURANT-AR/banner-churrasco.html&customHeight=small&canonicalWebPageURL=https://mattlemus.github.io/RESTAURANT-AR/churrasco.html"><img alt="" width="1" height="1" src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==">Ver en mi mesa (AR)</a>
+  <a id="ql" class="cta" rel="ar" href="churrasco.usdz?v=2#allowsContentScaling=0&custom=https://mattlemus.github.io/RESTAURANT-AR/banner-churrasco.html&customHeight=small&canonicalWebPageURL=https://mattlemus.github.io/RESTAURANT-AR/churrasco.html"><img alt="" width="1" height="1" src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==">Ver en mi mesa (AR)</a>
   <!-- ARKit tarda en encontrar la mesa con poca luz o moviendo rapido ("Move iPhone to start"); esto lo acorta -->
   <p id="tip">Con buena luz, apunta a la mesa y mueve el celular despacio de lado a lado.</p>
 </div>
@@ -48,7 +49,7 @@
       // Scene Viewer dentro de Google Play Services for AR: si el celular no tiene ARCore (ej. Honor), Android no encuentra
       // el paquete y abre browser_fallback_url (ar.html) en vez de cerrarse como hacia el Scene Viewer de la app de Google
       const abs = (u) => new URL(u, location.href).href
-      slam.href = 'intent://arvr.google.com/scene-viewer/1.0?file=' + encodeURIComponent(abs('churrasco.glb')) +
+      slam.href = 'intent://arvr.google.com/scene-viewer/1.0?file=' + encodeURIComponent(abs('churrasco.glb?v=2')) +
         '&mode=ar_only&resizable=false&title=' + encodeURIComponent(document.title) +
         '#Intent;scheme=https;package=com.google.ar.core;action=android.intent.action.VIEW;S.browser_fallback_url=' +
         encodeURIComponent(abs(slam.getAttribute('href'))) + ';end;'
